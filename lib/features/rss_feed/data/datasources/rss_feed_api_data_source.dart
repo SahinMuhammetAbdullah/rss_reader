@@ -4,28 +4,34 @@ import 'dart:io';
 import 'dart:convert';
 import 'package:dio/dio.dart';
 import 'package:dio/io.dart';
-import 'package:crypto/crypto.dart';
 import 'package:lucide_icons/lucide_icons.dart';
+import 'package:flutter/foundation.dart';
+import 'package:crypto/crypto.dart';
+
+// FeedItem ve Category modellerini içerir.
+// (Kullanıcının model dosyasına göre Category yerine RssCategory de olabilir.)
 import '../../domain/models/feed_item.dart';
 
 final Dio _httpClient = Dio();
 
-// Geçici SSL/Sertifika Doğrulamasını Atlar (DEV'de kalmalı)
+// =================================================================
+// YARDIMCI FONKSİYONLAR
+// =================================================================
+
 void _setupHttpClientForDev() {
-  if (Platform.isAndroid || Platform.isIOS) {
+  if (kDebugMode && (Platform.isAndroid || Platform.isIOS)) {
     _httpClient.httpClientAdapter = IOHttpClientAdapter(
       createHttpClient: () {
         final client = HttpClient();
-        // ❌ Bu satır KALDIRILIYOR veya YORUM SATIRI yapılıyor:
-        // client.badCertificateCallback = (cert, host, port) => true;
+        // Geliştirme ortamında SSL sertifika hatalarını yok say
+        client.badCertificateCallback = (cert, host, port) => true;
         return client;
       },
     );
+    if (kDebugMode) print('✅ DEV Ortamı: SSL sertifika doğrulaması ATLANDI.');
   }
-  print('PROD: SSL sertifika doğrulaması DEVREDE.');
 }
 
-// Yardımcı Fonksiyon: Zaman damgasını "X önce" formatına çevirir
 String _formatTimeAgo(int timestamp) {
   final now = DateTime.now();
   final publishedDate = DateTime.fromMillisecondsSinceEpoch(timestamp * 1000);
@@ -49,278 +55,321 @@ String _formatTimeAgo(int timestamp) {
 // =================================================================
 abstract class RssFeedDataSource {
   Future<String> authenticate(String url, String username, String password);
-  Future<List<Category>> getCategories(String apiUrl, String token);
+  Future<List<RssCategory>> getCategories(
+      String apiUrl, String token); // <<< TİP DÜZELTİLDİ
   Future<List<FeedItem>> getFeedItems(String apiUrl, String token);
 }
 
 // =================================================================
-// SOMUT SINIF UYGULAMASI
+// SOMUT SINIF UYGULAMASI (Google Reader API Uyumlu)
 // =================================================================
 class RssFeedApiDataSource implements RssFeedDataSource {
+  // Veri Cache'leri
+  List<RssCategory> _categoriesCache = [];
+  Map<int, int> _feedIdToGroupId = {}; // Feed ID -> Category ID eşleştirme
+  Map<int, String> _feedIdToFeedName =
+      {}; // Feed ID -> Feed Adı (Source Name) eşleştirme
+
   RssFeedApiDataSource() {
     _setupHttpClientForDev();
   }
 
-  // Kategori Eşleştirme için Cache alanları
-  List<Category> _categoriesCache = [];
-  Map<int, int> _feedIdToGroupId = {}; // feed_id -> group_id eşlemesi
-  // YENİ: feed_id -> feed_adı eşlemesi için bir cache
-  Map<int, String> _feedIdToName = {};
-
-  // ===============================================================
-  // 🔐 1. Kimlik Doğrulama (Fever API)
-  // ===============================================================
-  @override
-  Future<String> authenticate(
-      String url, String username, String password) async {
-    // URL normalleştirme
+  String _normalizeUrl(String url) {
     String normalizedUrl = url.replaceAll(RegExp(r'/+$'), '');
     if (!normalizedUrl.startsWith('https://') &&
         !normalizedUrl.startsWith('http://')) {
       normalizedUrl = 'https://' + normalizedUrl;
     }
     normalizedUrl = normalizedUrl.replaceFirst('http://', 'https://');
+    return normalizedUrl;
+  }
 
-    final authEndpointUrl = '$normalizedUrl/p/api/fever.php';
-
-    // API Anahtarını Hazırlama
-    final isApiKeyFormat = password.length == 32 &&
-        RegExp(r'^[0-9a-fA-F]{32}$').hasMatch(password);
-    final String finalApiKey = isApiKeyFormat
-        ? password
-        : md5.convert(utf8.encode('$username:$password')).toString();
+  // ===============================================================
+  // 🔐 1. Kimlik Doğrulama (GRAPI: ClientLogin)
+  // ===============================================================
+  @override
+  Future<String> authenticate(
+      String url, String username, String password) async {
+    final normalizedUrl = _normalizeUrl(url);
+    // Dökümantasyonda belirtilen ClientLogin uç noktası
+    final authEndpointUrl =
+        '$normalizedUrl/p/api/greader.php/accounts/ClientLogin';
 
     try {
       final response = await _httpClient.post(
         authEndpointUrl,
         data: {
-          'api': 'true',
-          'api_key': finalApiKey,
-          'user_id': 1,
+          'Email': username,
+          'Passwd': password,
+          'accountType': 'HOSTED_OR_GOOGLE',
+          'service': 'reader',
         },
         options: Options(
           contentType: Headers.formUrlEncodedContentType,
+          // 401 hatalarını yakalamak için validateStatus ayarı
           validateStatus: (status) =>
               status != null &&
               (status >= 200 && status < 400 || status == 401),
         ),
       );
 
-      if (response.statusCode == 200 && response.data is Map<String, dynamic>) {
-        final json = response.data as Map<String, dynamic>;
+      if (response.statusCode == 200 && response.data is String) {
+        final String responseBody = response.data.toString();
 
-        if (json.containsKey('auth') && json['auth'] == 1) {
-          return finalApiKey;
+        final tokenMatch = RegExp(r'Auth=(.+)\n?').firstMatch(responseBody);
+        if (tokenMatch != null && tokenMatch.group(1) != null) {
+          // Token: "alice/8e6845e0..." formatında döndürülür
+          return tokenMatch.group(1)!;
         } else {
-          throw Exception(
-              '❌ Giriş başarısız: Kullanıcı adı/şifre veya API anahtarı hatalı.');
+          throw Exception('❌ GRAPI yanıtında Auth token bulunamadı.');
         }
+      } else if (response.statusCode == 401) {
+        throw Exception(
+            '❌ Yetkilendirme Başarısız! Kullanıcı adı veya şifre hatalı.');
       } else {
         throw Exception(
-            '❌ Fever API geçersiz yanıt veya bilinmeyen hata: ${response.statusCode}');
+            '❌ Kimlik doğrulama geçersiz yanıt: ${response.statusCode} - ${response.data}');
       }
     } on DioException {
       rethrow;
     } catch (e) {
-      throw Exception('⚠️ Beklenmeyen bir hata oluştu: $e');
+      throw Exception('⚠️ Beklenmeyen hata (Kimlik Doğrulama): $e');
     }
   }
 
   // ===============================================================
-  // 📂 2. Kategorileri Getir (Fever API) - Kategori Sayısı ve Cache Eklendi
+  // 📂 2. Kategorileri Getir (GRAPI: tag/list + subscription/list)
   // ===============================================================
   @override
-  Future<List<Category>> getCategories(String apiUrl, String token) async {
-    final categoriesEndpointUrl = '$apiUrl/p/api/fever.php';
+  Future<List<RssCategory>> getCategories(String apiUrl, String token) async {
+    final normalizedUrl = _normalizeUrl(apiUrl);
+    // Dökümantasyonda belirtilen uç noktalar
+    final tagsEndpointUrl =
+        '$normalizedUrl/p/api/greader.php/reader/api/0/tag/list?output=json';
+    final subscriptionsEndpointUrl =
+        '$normalizedUrl/p/api/greader.php/reader/api/0/subscription/list?output=json';
 
     try {
-      final response = await _httpClient.post(
-        categoriesEndpointUrl,
-        data: {
-          'api': 'true',
-          'api_key': token,
-          'groups': null,
-          'user_id': '1',
-          'feeds': null, // Feeds bilgisini de çekmek için ekledik
-        },
-        options: Options(
-          contentType: Headers.formUrlEncodedContentType,
-          validateStatus: (status) => status != null && status < 500,
-          receiveDataWhenStatusError: true,
-        ),
-      );
+      // ÇALIŞAN GRAPI HEADER FORMATI: Authorization: GoogleLogin auth=TOKEN
+      final headers = {'Authorization': 'GoogleLogin auth=$token'};
 
-      if (response.statusCode == 200 && response.data is Map<String, dynamic>) {
-        final json = response.data as Map<String, dynamic>;
+      final tagsResponse = await _httpClient.get(tagsEndpointUrl,
+          options: Options(headers: headers));
+      final subscriptionsResponse = await _httpClient
+          .get(subscriptionsEndpointUrl, options: Options(headers: headers));
 
-        if (json.containsKey('auth') &&
-            json['auth'] == 1 &&
-            json.containsKey('groups')) {
-          final groupsJson = json['groups'] as List;
-          final feedsGroupsJson = json['feeds_groups'] as List? ?? [];
-          final feedsJson = json['feeds'] as List? ?? []; // Feeds listesini al
+      if (tagsResponse.statusCode == 200 &&
+          subscriptionsResponse.statusCode == 200) {
+        final tagsJson = tagsResponse.data['tags'] as List? ?? [];
+        final subscriptionsJson =
+            subscriptionsResponse.data['subscriptions'] as List? ?? [];
 
-          // YENİ: Feed ID'den adını eşlemek için cache'i doldur
-          _feedIdToName.clear();
-          for (var feed in feedsJson) {
-            _feedIdToName[feed['id'] as int] =
-                feed['title'] as String? ?? 'Bilinmeyen Kaynak';
+        // Önbellekleri temizle
+        _feedIdToFeedName.clear();
+        _feedIdToGroupId.clear();
+
+        // --- 2a: Feed/Grup Eşleştirmesi ve Feed Adı Cache'i ---
+        for (var sub in subscriptionsJson) {
+          final String feedIdStr = sub['id'] as String? ?? '';
+          final String feedTitle =
+              sub['title'] as String? ?? 'Bilinmeyen Kaynak';
+          final int feedId = feedIdStr
+              .hashCode; // FreshRSS'in ID'si URI olduğundan hash kullanılır
+
+          _feedIdToFeedName[feedId] = feedTitle; // Feed Adını Kaydet
+
+          final List categoriesOfFeed = sub['categories'] as List? ?? [];
+          for (var categoryEntry in categoriesOfFeed) {
+            final String tagId = categoryEntry['id'] as String? ?? '';
+            final String categoryName = tagId.split('/').lastWhere(
+                (element) => element.isNotEmpty,
+                orElse: () => 'Genel');
+            final int categoryId = categoryName.hashCode;
+            _feedIdToGroupId[feedId] = categoryId;
           }
-
-          // Kategori Eşleştirme Mantığı
-          Map<int, List<int>> groupFeeds = {};
-          Map<int, int> groupFeedCount = {};
-          Map<int, String> groupIdToName = {
-            for (var g in groupsJson) g['id'] as int: g['title'] ?? 'Bilinmeyen'
-          };
-
-          for (var fg in feedsGroupsJson) {
-            final feedIdsString = fg['feed_ids'] as String? ?? '';
-            final groupId = fg['group_id'] as int;
-
-            final feedIds = feedIdsString
-                .split(',')
-                .where((id) => id.trim().isNotEmpty)
-                .map((id) => int.tryParse(id.trim()) ?? 0)
-                .where((id) => id != 0)
-                .toList();
-
-            groupFeeds[groupId] = feedIds;
-            groupFeedCount[groupId] = feedIds.length;
-
-            // Feed ID -> Group ID eşleşmesini cache'e kaydet
-            for (var feedId in feedIds) {
-              _feedIdToGroupId[feedId] = groupId;
-            }
-          }
-
-          // Category Modellerini Oluştur
-          _categoriesCache = groupsJson.map((group) {
-            final groupId = group['id'] as int;
-            final feedCount = groupFeedCount[groupId] ?? 0;
-
-            return Category(
-              id: groupId,
-              name: groupIdToName[groupId] ?? 'Bilinmeyen',
-              count: feedCount,
-              icon: LucideIcons.folder,
-              feedIds: groupFeeds[groupId] ?? [], // Alt feed ID'lerini atama
-            );
-          }).toList();
-
-          // "Hepsi" kategorisini listenin en başına ekle
-          List<int> allFeedIds =
-              _categoriesCache.expand((cat) => cat.feedIds).toSet().toList();
-          int totalFeedCount = allFeedIds.length;
-
-          _categoriesCache.insert(
-            0,
-            Category(
-              name: "Hepsi",
-              count: totalFeedCount,
-              icon: LucideIcons.home,
-              id: 0,
-              feedIds: allFeedIds,
-            ),
-          );
-
-          return _categoriesCache;
-        } else {
-          throw Exception(
-              'Kategoriler alınamadı: Geçersiz API yanıtı veya yetkilendirme hatası.');
         }
+
+        // --- 2b: Grup Adları, Sayıları ve Listesi ---
+        Map<int, List<int>> groupFeeds = {};
+        Map<int, int> groupFeedCount = {};
+        Map<int, String> groupIdToName = {};
+
+        // Tags'lardan kategori adlarını ve ID'lerini al
+        for (var tag in tagsJson) {
+          final String tagId = tag['id'] as String? ?? '';
+          final String tagName = tagId.split('/').lastWhere(
+              (element) => element.isNotEmpty,
+              orElse: () => 'Genel');
+          final int categoryId = tagName.hashCode;
+
+          groupIdToName[categoryId] = tagName;
+          groupFeeds[categoryId] = [];
+          groupFeedCount[categoryId] = 0;
+        }
+
+        // Genel (Untagged) feed'leri işle
+        _feedIdToFeedName.keys.forEach((feedId) {
+          final int groupId = _feedIdToGroupId[feedId] ?? 'Genel'.hashCode;
+          if (!groupIdToName.containsKey(groupId)) {
+            groupIdToName[groupId] = 'Genel';
+            groupFeeds[groupId] = [];
+            groupFeedCount[groupId] = 0;
+            _feedIdToGroupId[feedId] = groupId;
+          }
+          groupFeeds[groupId]!.add(feedId);
+          groupFeedCount[groupId] = (groupFeedCount[groupId] ?? 0) + 1;
+        });
+
+        // --- 2c: Category Listesi Oluşturma ---
+        _categoriesCache = groupIdToName.entries.map((entry) {
+          final int groupId = entry.key;
+          final String groupName = entry.value;
+          final int feedCount = groupFeedCount[groupId] ?? 0;
+
+          return RssCategory(
+            id: groupId,
+            name: groupName,
+            count: feedCount,
+            icon: LucideIcons.folder,
+            feedIds: groupFeeds[groupId] ?? [],
+          );
+        }).toList();
+
+        // "Hepsi" Kategorisini Ekle
+        List<int> allFeedIds = _feedIdToFeedName.keys.toList();
+        int totalFeedCount = allFeedIds.length;
+        _categoriesCache.insert(
+          0,
+          RssCategory(
+            name: "Hepsi",
+            count: totalFeedCount,
+            icon: LucideIcons.home,
+            id: 0,
+            feedIds: allFeedIds,
+          ),
+        );
+
+        return _categoriesCache;
       } else {
         throw Exception(
-            'Kategoriler alınamadı: Sunucu durumu kodu: ${response.statusCode}');
+            '❌ Kategoriler alınamadı: GRAPI sunucu durumu kodu: Tags: ${tagsResponse.statusCode}, Subscriptions: ${subscriptionsResponse.statusCode}');
       }
-    } on DioException {
-      rethrow;
+    } on DioException catch (e) {
+      if (e.type == DioExceptionType.connectionError) {
+        throw Exception(
+            '⚠️ Bağlantı Hatası: Sunucuya erişilemiyor. ${e.message}');
+      }
+      // Hata Yönetimi: Bu blok, 501/Yönlendirme döngüsü hatalarını yakalar
+      throw Exception('⚠️ Dio Hatası oluştu (Kategoriler): ${e.message}');
     } catch (e) {
-      throw Exception('⚠️ Beklenmeyen bir hata oluştu: $e');
+      throw Exception('⚠️ Beklenmeyen hata (Kategoriler): $e');
     }
   }
 
-// ===============================================================
-// 📰 3. RSS Feed Ögelerini Getir (Fever API) - Maksimum Öğeyi Zorlama
-// ===============================================================
+  // ===============================================================
+  // 📰 3. RSS Feed Ögelerini Getir (GRAPI: stream/contents)
+  // ===============================================================
   @override
   Future<List<FeedItem>> getFeedItems(String apiUrl, String token) async {
-    final feedEndpointUrl = '$apiUrl/p/api/fever.php';
+    final normalizedUrl = _normalizeUrl(apiUrl);
+    // Dökümantasyonda belirtilen uç nokta: reading-list tüm feed'leri çeker
+    final streamEndpointUrl =
+        '$normalizedUrl/p/api/greader.php/reader/api/0/stream/contents/user/-/state/com.google/reading-list?output=json';
 
     try {
-      final response = await _httpClient.post(
-        feedEndpointUrl,
-        data: {
-          'api': 'true',
-          'api_key': token,
-          'items': null,
-          'user_id': '1',
-          'since_id': 0, // En eski öğeden başla
-          'max_items': 2000, // Daha yüksek bir limit deniyoruz
+      final response = await _httpClient.get(
+        streamEndpointUrl,
+        queryParameters: {
+          'n': 200, // Çekilecek öğe sayısı
+          'r': 'd', // azalan sıralama (en yeni en üstte)
         },
         options: Options(
-          contentType: Headers.formUrlEncodedContentType,
+          headers: {
+            'Authorization': 'GoogleLogin auth=$token'
+          }, // Düzeltilmiş Header
           validateStatus: (status) => status != null && status < 500,
-          receiveDataWhenStatusError: true,
         ),
       );
 
       if (response.statusCode == 200 && response.data is Map<String, dynamic>) {
         final json = response.data as Map<String, dynamic>;
+        final itemsJson = json['items'] as List? ?? [];
+        List<FeedItem> feedItems = [];
 
-        if (json.containsKey('auth') &&
-            json['auth'] == 1 &&
-            json.containsKey('items')) {
-          final itemsJson = json['items'] as List;
+        for (var item in itemsJson) {
+          final String itemId = item['id'] as String? ?? '';
+          final String title = item['title'] as String? ?? 'Başlıksız';
+          final int timestamp = (item['published'] as int? ?? 0);
+          final String itemUrl = item['alternate'] != null &&
+                  (item['alternate'] as List).isNotEmpty
+              ? (item['alternate'] as List).first['href'] as String? ?? '#'
+              : '#';
+          final List categories = item['categories'] as List? ?? [];
+          final bool isRead =
+              categories.contains('user/-/state/com.google/read');
 
-          List<FeedItem> feedItems = (itemsJson).map((item) {
-            final int timestamp = item['created_on_time'] as int? ?? 0;
-            final String itemUrl = item['url'] as String? ?? '#';
-            final int feedId =
-                item['feed_id'] as int? ?? 0; // Doğrudan feedId'yi al
+          // FreshRSS/GRAPI, feed ID'yi origin/streamId olarak verir (URI formatında)
+          final String feedIdStr = item['origin']?['streamId'] as String? ?? '';
+          final int feedId = feedIdStr.hashCode;
 
-            // Kategori Adını Cache'den bulma
-            final int groupId = _feedIdToGroupId[feedId] ?? 0;
-            final String categoryName = _categoriesCache
-                .firstWhere((cat) => cat.id == groupId,
-                    orElse: () => Category(
-                        id: 0,
-                        name: 'Genel',
-                        count: 0,
-                        icon: LucideIcons.folder,
-                        feedIds: []))
-                .name;
+          // 🚀 Kaynak Adını Cache'den çekme
+          final String sourceName = _feedIdToFeedName[feedId] ??
+              item['origin']?['title'] as String? ??
+              'Bilinmeyen Kaynak';
 
-            // Feed ID'den feed adını al
-            final String feedName =
-                _feedIdToName[feedId] ?? 'Bilinmeyen Kaynak';
+          // Kategori Adını Eşleştirme
+          String categoryName = 'Genel';
+          int groupId = 'Genel'.hashCode;
+          if (_feedIdToGroupId.containsKey(feedId)) {
+            groupId = _feedIdToGroupId[feedId]!;
+            final RssCategory? categoryInCache =
+                _categoriesCache.firstWhereOrNull((cat) => cat.id == groupId);
+            categoryName = categoryInCache?.name ?? 'Genel';
+          }
 
-            return FeedItem(
-              id: item['id'].hashCode,
-              title: item['title'] ?? 'Başlıksız',
-              sourceName: feedName, // sourceName olarak feed adını kullandık
-              feedId: feedId, // Yeni eklenen feedId alanını doldurduk
+          feedItems.add(
+            FeedItem(
+              id: itemId.hashCode,
+              title: title,
+              source: sourceName, // Kaynak Adı
+              feedId: feedId, // Filtreleme için ID
               time: _formatTimeAgo(timestamp),
-              unread: item['is_read'] == 0,
+              unread: !isRead,
               category: categoryName,
               url: itemUrl,
-              timestamp: timestamp,
-            );
-          }).toList();
-
-          return feedItems;
-        } else {
-          throw Exception(
-              'Feed öğeleri alınamadı: Geçersiz API yanıtı veya yetkilendirme hatası.');
+              timestamp: timestamp, sourceName: sourceName,
+            ),
+          );
         }
+        return feedItems;
       } else {
         throw Exception(
-            'Feed öğeleri alınamadı: Sunucu durumu kodu: ${response.statusCode}');
+            '❌ Feed öğeleri alınamadı: GRAPI sunucu durumu kodu: ${response.statusCode}');
       }
-    } on DioException {
-      rethrow;
+    } on DioException catch (e) {
+      if (e.type == DioExceptionType.connectionError) {
+        throw Exception(
+            '⚠️ Bağlantı Hatası: Sunucuya erişilemiyor. ${e.message}');
+      }
+      // Hata Yönetimi: Yönlendirme döngüsü/sunucu hatalarını yakalar
+      throw Exception('⚠️ Dio Hatası oluştu (Feed Öğeleri): ${e.message}');
     } catch (e) {
-      throw Exception('⚠️ Beklenmeyen bir hata oluştu: $e');
+      throw Exception('⚠️ Beklenmeyen hata (Feed Öğeleri): $e');
     }
+  }
+
+  // Eksik Dio Helper'ı Ekle
+  void _setupDioInterceptors() {
+    /* ... */
+  } // Daha önce eklediğiniz interceptor metodu buraya gelmeli.
+}
+
+// firstWhereOrNull uzantısını simüle edelim (eğer projenizde yoksa)
+extension on List<RssCategory> {
+  RssCategory? firstWhereOrNull(bool Function(RssCategory) test) {
+    for (var element in this) {
+      if (test(element)) return element;
+    }
+    return null;
   }
 }

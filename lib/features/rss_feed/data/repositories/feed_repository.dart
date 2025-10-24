@@ -50,7 +50,7 @@ class FeedRepository {
     }
   }
 
-  Future<List<Category>> fetchCategories() async {
+  Future<List<RssCategory>> fetchCategories() async {
     try {
       final credentials = await storageService.getCredentials();
       final url = credentials['url']!;

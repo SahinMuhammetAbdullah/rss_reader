@@ -1,45 +1,46 @@
-// lib/features/rss_feed/domain/models/feed_item.dart
+// lib/features/rss_feed/domain/models/feed_item.dart (veya models.dart gibi bir dosya)
 
 import 'package:flutter/material.dart';
 
 class FeedItem {
   final int id;
   final String title;
-  final String sourceName; // Yeni isim: Kaynağın adı
-  final int feedId; // YENİ: Doğrudan feed ID'si
+  final String sourceName;
+  final int feedId;
   final String time;
   final bool unread;
-  final String category;
+  final String category; // Bu hala string olarak kategori adını tutabilir
   final String url;
   final int timestamp;
+  
 
   FeedItem({
     required this.id,
     required this.title,
-    required this.sourceName, // source yerine sourceName
-    required this.feedId, // Yeni alan
+    required this.sourceName,
+    required this.feedId,
     required this.time,
     required this.unread,
     required this.category,
     required this.url,
-    required this.timestamp,
+    required this.timestamp, required String source,
   });
 }
 
-
-class Category {
+// ⚠️ Category ismini RssCategory olarak değiştirdik
+class RssCategory {
   final int id;
   final String name;
   final int count;
   final IconData icon;
-  final List<int> feedIds; // <<< YENİ: Bu kategoriye ait feed ID'leri
+  final List<int> feedIds;
 
-  Category({
+  RssCategory({
     required this.id,
     required this.name,
     required this.count,
     required this.icon,
-    required this.feedIds, // <<< YENİ: Constructor'a eklendi
+    required this.feedIds,
   });
 }
 
