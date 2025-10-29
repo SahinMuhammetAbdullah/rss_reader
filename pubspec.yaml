@@ -1,0 +1,56 @@
+name: fresh_rss_mobile_design
+description: A mobile design implementation for FreshRSS using Flutter and Clean Architecture principles.
+
+# Proje versiyon bilgisi
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # İsteğe bağlı: CupertinoIcons, iOS stilinde ikonlar için.
+  cupertino_icons: ^1.0.6 
+  
+  # State Yönetimi: Clean Architecture'da Presentation katmanındaki ViewModel'ı
+  # arayüze bağlamak için popüler bir seçenek.
+  provider: ^6.1.1 
+
+  # İkonlar: Orijinal React/Lucide ikonu kümesini kullanmak için.
+  # Bu paketi kullanmak, orijinal tasarıma sadık kalmayı kolaylaştırır.
+  lucide_icons_flutter: ^3.1.5
+  lucide_icons: ^0.257.0
+  flutter_secure_storage: ^9.2.4
+  dio: ^5.9.0
+  crypto: ^3.0.3
+  url_launcher: ^6.3.1
+  flutter_dotenv: ^6.0.0
+
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  
+  # Kod kalitesi için linter kuralları
+  flutter_lints: ^3.0.1 
+
+# Flutter özelleştirmeleri
+flutter:
+  # 'uses-material-design: true' Material Design kurallarını kullanacağınızı belirtir.
+  uses-material-design: true
+  assets:
+    - .env
+  # Eğer ileride özel fontlar kullanacaksanız bu kısmı açabilirsiniz:
+  # fonts:
+  #   - family: Roboto # Örneğin, React kodunda varsayılan font
+  #     fonts:
+  #       - asset: assets/fonts/Roboto-Regular.ttf
+  #       - asset: assets/fonts/Roboto-Bold.ttf
+  #         weight: 700
+  
+  # Eğer resimler, logolar veya başka varlıklar (assets) ekleyecekseniz:
+  # assets:
+  #   - assets/images/
+  #   - assets/icons/
