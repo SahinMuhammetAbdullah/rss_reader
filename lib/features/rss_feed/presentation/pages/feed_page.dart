@@ -3,12 +3,10 @@
 import 'package:flutter/material.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 import 'package:provider/provider.dart';
-import 'package:url_launcher/url_launcher.dart'; // Bu import muhtemelen FeedItemCard içinde kullanılabilir
 import '../../../../core/constants/app_colors.dart';
 import '../view_models/feed_view_model.dart';
 import '../widgets/feed_item_card.dart';
 import '../widgets/bottom_nav_bar.dart';
-import '../../domain/models/feed_item.dart'; // Gerekli değilse kaldırılabilir
 
 class FeedPage extends StatelessWidget {
   const FeedPage({super.key});
@@ -26,13 +24,22 @@ class FeedPage extends StatelessWidget {
       body: Column(
         children: [
           _buildHeader(context, viewModel),
+          if (viewModel.errorMessage != 'Bilinmeyen Hata')
+            Container(
+              padding: const EdgeInsets.all(16),
+              color: Colors.red.shade100,
+              child: Text(
+                'Hata: ${viewModel.errorMessage}',
+                style: TextStyle(
+                    color: Colors.red.shade800, fontWeight: FontWeight.bold),
+              ),
+            ),
           Expanded(
+            // Yenileme (Pull-to-Refresh) mekanizması
             child: RefreshIndicator(
               onRefresh: () => viewModel.fetchAllRssData(),
               color: AppColors.primaryIndigo,
-              child:
-                  // KRİTİK DÜZELTME: Filtrelenmiş ve sıralanmış listeyi kullan
-                  ListView.builder(
+              child: ListView.builder(
                 itemCount: viewModel.filteredAndSortedFeeds.length,
                 itemBuilder: (context, index) {
                   return FeedItemCard(
@@ -47,10 +54,8 @@ class FeedPage extends StatelessWidget {
     );
   }
 
-  // Header'ı ViewModel alacak şekilde güncelliyoruz
   Widget _buildHeader(BuildContext context, FeedViewModel viewModel) {
     return Container(
-      // Gradient arka plan için padding ayarı
       padding: EdgeInsets.only(
           top: MediaQuery.of(context).padding.top + 16,
           bottom: 16,
@@ -76,55 +81,56 @@ class FeedPage extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // BAŞLIK ve AKSİYONLAR
+          // Başlık ve Aksiyonlar
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            // Bu ana Row, iki ana bloğu yan yana koyar
             children: [
-              // 1. SOL BLOK: Başlık ve Yenileme İkonu
+              
+              // 1. SOL BLOK: BAŞLIK ve YENİLEME (Expanded ile kalan tüm alanı kapla)
+              Expanded( // <<< BU, BAŞLIĞIN SAĞ BLOĞU İTMESİNİ ENGELLER
+                child: Row(
+                  children: [
+                    // Text widget'ına overflow.ellipsis uygulamaya gerek yok, 
+                    // çünkü parent Expanded zaten yer açacaktır.
+                    const Text(
+                      "FreshFlow", 
+                      style: TextStyle(
+                        fontSize: 24,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    // YENİLEME İKONU (Sabit boyutlu)
+                    if (viewModel.isLoading)
+                      const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)),
+                    if (!viewModel.isLoading)
+                      IconButton(
+                        icon: const Icon(LucideIcons.refreshCw, color: Colors.white, size: 20),
+                        onPressed: () => viewModel.fetchAllRssData(),
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(),
+                      ),
+                  ],
+                ),
+              ),
+              
+              // 2. SAĞ BLOK: Aksiyon İkonları
+              // 💡 ÇÖZÜM 2: Ikonlar arasına Sized Box yerine negatif margin veya sade ikon yerleşimi.
               Row(
-                // Başlık (Text) ve Yenileme İkonu
+                mainAxisSize: MainAxisSize.min,
                 children: [
-                  const Text(
-                    "FreshFlow", // TEK KULLANIM
-                    style: TextStyle(
-                      fontSize: 24,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.white,
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  // Yenileme ikonu veya Loading Indicator
-                  if (viewModel.isLoading)
-                    const SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(
-                            color: Colors.white, strokeWidth: 2)),
-                  if (!viewModel.isLoading)
-                    IconButton(
-                      icon: const Icon(LucideIcons.refreshCw,
-                          color: Colors.white, size: 20),
-                      onPressed: () => viewModel.fetchAllRssData(),
-                      padding:
-                          EdgeInsets.zero, // Padding'i sıfırlayarak yer kazan
-                      constraints: const BoxConstraints(),
-                    ),
+                  _buildHeaderIcon(LucideIcons.search), // Arama
+                  // SizedBox(width: 12), <-- KALDIRILDI!
+                  _buildSortButton(viewModel), // Sıralama
+                  // SizedBox(width: 12), <-- KALDIRILDI!
+                  _buildMarkAllReadButton(viewModel), // Tümünü Oku
                 ],
               ),
-
-              // 2. SAĞ BLOK: Arama ve Sıralama İkonları
-              Row(
-                children: [
-                  _buildHeaderIcon(LucideIcons.search),
-                  const SizedBox(width: 12),
-                  _buildSortButton(viewModel), // SIRALAMA BUTONU
-                ],
-              ),
-              // Kaldırılan satır: const Text("FreshFlow", ...)
             ],
           ),
-
+          const SizedBox(height: 16),
+          _buildReadFilterBar(viewModel), // OKUNDU/OKUNMADI Filtre Çubuğu
           const SizedBox(height: 16),
           _buildCategoryList(viewModel), // KATEGORİ LİSTESİ VE FİLTRELEME
         ],
@@ -132,18 +138,65 @@ class FeedPage extends StatelessWidget {
     );
   }
 
-  // Sıralama Butonu
+  Widget _buildReadFilterBar(FeedViewModel viewModel) {
+    final options = [
+      {'label': 'Tümü', 'value': 'all'},
+      {'label': 'Okunmamış', 'value': 'unread'},
+    ];
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.2),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Colors.white.withOpacity(0.1)),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: options.map((option) {
+          final isSelected = viewModel.readFilter == option['value'];
+          return TextButton(
+            onPressed: () => viewModel.setReadFilter(option['value']!),
+            style: TextButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              backgroundColor: isSelected ? Colors.white : Colors.transparent,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8)),
+            ),
+            child: Text(
+              option['label']!,
+              style: TextStyle(
+                color: isSelected ? AppColors.primaryIndigo : Colors.white,
+                fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                fontSize: 14,
+              ),
+            ),
+          );
+        }).toList(),
+      ),
+    );
+  }
+
+  Widget _buildMarkAllReadButton(FeedViewModel viewModel) {
+    return IconButton(
+      icon: Icon(LucideIcons.checkCheck, // İki onay işareti
+          color: Colors.white,
+          size: 20),
+      onPressed: viewModel.isLoading ? null : () => viewModel.markAllAsRead(),
+      padding: const EdgeInsets.all(8),
+      constraints: const BoxConstraints(),
+    );
+  }
+
   Widget _buildSortButton(FeedViewModel viewModel) {
     return IconButton(
       icon: Icon(
-          // 'desc' ise aşağı ok (en yeni), 'asc' ise yukarı ok (en eski)
           viewModel.sortOrder == 'desc'
               ? LucideIcons.arrowDownWideNarrow
               : LucideIcons.arrowUpWideNarrow,
           color: Colors.white,
           size: 20),
       onPressed: () {
-        // Sıralama yönünü değiştir
         viewModel.setSortOrder(viewModel.sortOrder == 'desc' ? 'asc' : 'desc');
       },
       padding: const EdgeInsets.all(8),
@@ -167,7 +220,6 @@ class FeedPage extends StatelessWidget {
     );
   }
 
-  // Kategori Listesi ve Filtreleme
   Widget _buildCategoryList(FeedViewModel viewModel) {
     return SizedBox(
       height: 40,
@@ -198,7 +250,6 @@ class FeedPage extends StatelessWidget {
                             : Colors.white),
                   ),
                   const SizedBox(width: 6),
-                  // Kategori sayısını gösterme (Artık gerçek data)
                   Container(
                     padding:
                         const EdgeInsets.symmetric(horizontal: 8, vertical: 2),

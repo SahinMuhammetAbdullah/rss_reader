@@ -20,16 +20,18 @@ class FeedRepository {
     required String password,
   }) async {
     try {
-      // API'den token'ı al
       final token = await apiDataSource.authenticate(url, username, password);
 
-      // Başarılı olursa, token'ı güvenli depoda sakla
+      // KRİTİK DÜZELTME: Orijinal şifreyi de kaydet
       await storageService.saveCredentials(
-          url: url, username: username, authToken: token);
-
-      return true; // Giriş başarılı
+          url: url,
+          username: username,
+          authToken: token,
+          password: password // <<< EKLENDİ
+          );
+      return true;
     } catch (e) {
-      rethrow; // ViewModel'e hatayı ilet
+      rethrow;
     }
   }
 
@@ -41,7 +43,6 @@ class FeedRepository {
 
       // Gerçek API çağrısı
       final apiFeeds = await apiDataSource.getFeedItems(url, token);
-
       return apiFeeds;
     } catch (e) {
       // Hata durumunda boş liste döndürerek uygulamanın çökmesini engelle
@@ -69,7 +70,25 @@ class FeedRepository {
     return storageService.getServerUrl();
   }
 
+  Future<void> markItemStatus(String itemId, bool isRead) async {
+    // <<< SADECE İHTİYAÇ OLAN PARAMETRELER KALDI
+    final credentials = await storageService.getCredentials();
+    final url = credentials['url']!;
+    final token = credentials['authToken']!;
+
+    // DataSource'u çağır
+    await apiDataSource.markItemStatus(
+        url, token, itemId, isRead); // <<< 4 ARGÜMAN GÖNDERİLİYOR
+  }
+
   Future<bool> isUserLoggedIn() => storageService.isUserLoggedIn();
 
   Future<void> logout() => storageService.logout();
+  Future<void> markAllAsRead() async {
+    final credentials = await storageService.getCredentials();
+    final url = credentials['url']!;
+    final token = credentials['authToken']!;
+
+    await apiDataSource.markAllAsRead(url, token);
+  }
 }

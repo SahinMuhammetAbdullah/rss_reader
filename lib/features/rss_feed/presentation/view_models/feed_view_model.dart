@@ -8,6 +8,7 @@ import '../../domain/models/feed_item.dart';
 class FeedViewModel extends ChangeNotifier {
   final FeedRepository repository;
 
+  // Durumlar
   bool _isLoading = false;
   bool get isLoading => _isLoading;
 
@@ -17,12 +18,14 @@ class FeedViewModel extends ChangeNotifier {
   String _activeTab = 'home';
   String get activeTab => _activeTab;
 
+  // Veri Listeleri
   List<FeedItem> _feeds = [];
-  List<FeedItem> get feeds => _feeds;
+  List<FeedItem> get feeds => _feeds; // Login kontrolü için gerekli
 
-  List<RssCategory>  _categories = [];
-  List<RssCategory>  get categories => _categories;
+  List<RssCategory> _categories = [];
+  List<RssCategory> get categories => _categories;
 
+  // Simülasyon Verisi (ServersPage için zorunlu)
   final List<Server> _servers = [
     Server(
         name: "Fresh Flow Sunucusu",
@@ -32,40 +35,68 @@ class FeedViewModel extends ChangeNotifier {
   ];
   List<Server> get servers => _servers;
 
+  // Filtreleme ve Sıralama Durumu
   String _activeCategoryFilter = 'Hepsi';
   String get activeCategoryFilter => _activeCategoryFilter;
 
-  String _sortOrder = 'desc';
+  String _sortOrder = 'desc'; // 'desc' (En yeni) veya 'asc' (En eski)
   String get sortOrder => _sortOrder;
 
-  FeedViewModel({required this.repository});
+  String _readFilter = 'all'; // 'all', 'unread', 'read'
+  String get readFilter => _readFilter;
+
+  String? _loggedInServerUrl;
+  String? get loggedInServerUrl => _loggedInServerUrl;
+
+  FeedViewModel(this.repository);
+  // =========================================================
+  // Filtreleme ve Sıralama Mantığı
+  // =========================================================
 
   List<FeedItem> get filteredAndSortedFeeds {
-    List<FeedItem> filtered = [];
+    // 1. Kategori Filtreleme
+    List<FeedItem> result = _feeds.where((feed) {
+      if (_activeCategoryFilter == 'Hepsi') {
+        return true;
+      }
 
-    if (_activeCategoryFilter == 'Hepsi') {
-      filtered = List.from(_feeds);
-    } else {
       final selectedCategory = _categories.firstWhere(
         (cat) => cat.name == _activeCategoryFilter,
         orElse: () => RssCategory(
-            id: -1, name: '', count: 0, icon: LucideIcons.folder, feedIds: []),
+            id: 0, name: '', count: 0, icon: LucideIcons.folder, feedIds: []),
       );
 
-      if (selectedCategory.id != -1) {
-        filtered = _feeds.where((feed) {
-          return selectedCategory.feedIds.contains(feed.feedId);
-        }).toList();
-      }
-    }
+      final feedId = feed.feedId; // FeedItem modelindeki feedId kullanılır.
 
-    filtered.sort((a, b) {
-      final int comparison = a.timestamp.compareTo(b.timestamp);
-      return _sortOrder == 'desc' ? -comparison : comparison;
+      if (feedId == 0) return false;
+
+      // Seçili kategorinin feedIds listesinde bu feed ID'si var mı kontrol et
+      return selectedCategory.feedIds.contains(feedId);
+    }).toList();
+
+    // 2. Okunmuş/Okunmamış Filtrelemesi
+    result = result.where((feed) {
+      if (_readFilter == 'unread') {
+        return feed.unread;
+      }
+      if (_readFilter == 'read') {
+        return !feed.unread;
+      }
+      return true; // 'all'
+    }).toList();
+
+    // 3. Sıralama (Yayın Tarihine Göre Kesin Sıralama)
+    result.sort((a, b) {
+      final order = a.timestamp.compareTo(b.timestamp);
+      return _sortOrder == 'desc' ? -order : order;
     });
 
-    return filtered;
+    return result;
   }
+
+  // =========================================================
+  // API ve Durum Yönetimi
+  // =========================================================
 
   Future<void> fetchAllRssData() async {
     _isLoading = true;
@@ -73,11 +104,11 @@ class FeedViewModel extends ChangeNotifier {
     notifyListeners();
 
     try {
+      // Kategori çekimi feed çekiminden önce olmalı ki eşleşme yapılabilsin
       await fetchCategories();
       await fetchFeeds();
     } catch (e) {
       _errorMessage = "Veri çekilirken hata oluştu: ${e.toString()}";
-      print('Veri çekme hatası: $_errorMessage');
     } finally {
       _isLoading = false;
       notifyListeners();
@@ -94,6 +125,7 @@ class FeedViewModel extends ChangeNotifier {
           url: url, username: username, password: password);
 
       if (success) {
+        _loggedInServerUrl = url;
         await fetchAllRssData();
         return true;
       }
@@ -102,7 +134,6 @@ class FeedViewModel extends ChangeNotifier {
       _errorMessage = e.toString().contains('yanlış')
           ? e.toString()
           : "Giriş hatası: ${e.toString()}";
-      print('Giriş hatası: $_errorMessage');
       return false;
     } finally {
       _isLoading = false;
@@ -115,7 +146,6 @@ class FeedViewModel extends ChangeNotifier {
       _feeds = await repository.fetchFeeds();
     } catch (e) {
       _errorMessage = "Akış verileri çekilemedi: ${e.toString()}";
-      print('Feed çekme hatası: $_errorMessage');
     }
   }
 
@@ -124,9 +154,87 @@ class FeedViewModel extends ChangeNotifier {
       _categories = await repository.fetchCategories();
     } catch (e) {
       _errorMessage = "Kategoriler çekilemedi: ${e.toString()}";
-      print('Kategori çekme hatası: $_errorMessage');
     }
   }
+
+  Future<void> markItemStatus(String itemId, bool isRead) async {
+    final index = _feeds.indexWhere((feed) => feed.id == itemId);
+
+    // 1. YEREL GÜNCELLEME (Hata olsa da ikon değişsin)
+    if (index != -1) {
+      final currentFeed = _feeds[index];
+      _feeds[index] = FeedItem(
+        id: currentFeed.id,
+        title: currentFeed.title,
+        source: currentFeed.source,
+        time: currentFeed.time,
+        unread: !isRead, // Durumu yerel olarak tersine çevir
+        image: currentFeed.image,
+        category: currentFeed.category,
+        url: currentFeed.url,
+        timestamp: currentFeed.timestamp,
+        feedId: currentFeed.feedId,
+        // 🚨 KRİTİK: EKSİK OLAN ALANLAR EKLENDİ
+  
+      );
+      notifyListeners();
+    }
+
+    // 2. SUNUCU İŞLEMİ VE KALICILIK
+    try {
+      await repository.markItemStatus(itemId, isRead);
+      print('✅ Sunucuya güncelleme isteği başarıyla gönderildi.');
+
+      // SUNUCU BAŞARILIYSA: Hata olmaması için zorunlu senkronizasyon
+      await fetchAllRssData();
+      print('🔄 Senkronizasyon başarılı, veri güncel.');
+    } catch (e) {
+      print('⚠️ Sunucuya kaydetme isteği gönderildi, ancak hata alındı. $e');
+      // Hata durumunda kullanıcıya hata mesajını gösterme
+      _errorMessage = 'Makale durumu sunucuya kaydedilemedi: ${e.toString()}';
+      notifyListeners();
+    }
+  }
+
+  Future<void> markAllAsRead() async {
+    _isLoading = true;
+    notifyListeners();
+
+    try {
+      await repository.markAllAsRead();
+
+      // KRİTİK DÜZELTME: Yerel listeyi güncelle ve tüm zorunlu parametreleri kopyala
+      _feeds = _feeds
+          .map<FeedItem>((feed) => FeedItem(
+                // <<< TİP GÜVENLİĞİ: <FeedItem> ekle
+
+                // ❌ Hata 1 Çözümü: Eksik olan zorunlu 'id' parametresi
+                id: feed.id,
+
+                title: feed.title,
+                source: feed.source,
+                time: feed.time,
+                unread: false, // <<< Durumu okunmuş yap
+                image: feed.image,
+                category: feed.category,
+                url: feed.url,
+                timestamp: feed.timestamp,
+                feedId: feed.feedId,
+              ))
+          .toList(); // <<< Hata 2 Çözümü: toList() tipi doğru döndürür
+
+      _activeCategoryFilter = 'Hepsi'; // Filtreyi sıfırla
+    } catch (e) {
+      _errorMessage = 'Tümünü okundu işaretleme başarısız: ${e.toString()}';
+    } finally {
+      _isLoading = false;
+      notifyListeners();
+    }
+  }
+
+  // =========================================================
+  // UI Aksiyonları
+  // =========================================================
 
   void setActiveTab(String tabName) {
     if (_activeTab != tabName) {
@@ -149,8 +257,19 @@ class FeedViewModel extends ChangeNotifier {
     }
   }
 
+  void setReadFilter(String filter) {
+    if (_readFilter != filter) {
+      _readFilter = filter;
+      notifyListeners();
+    }
+  }
+
   Future<bool> checkLoginStatus() async {
-    return await repository.isUserLoggedIn();
+    final isLoggedIn = await repository.isUserLoggedIn();
+    if (isLoggedIn) {
+      _loggedInServerUrl = await repository.getServerUrl();
+    }
+    return isLoggedIn;
   }
 
   Future<void> logout() async {
@@ -159,11 +278,14 @@ class FeedViewModel extends ChangeNotifier {
 
     await repository.logout();
 
+    // Tüm durumları sıfırla
     _feeds = [];
     _categories = [];
     _activeTab = 'home';
     _activeCategoryFilter = 'Hepsi';
     _sortOrder = 'desc';
+    _readFilter = 'all';
+    _loggedInServerUrl = null;
 
     _isLoading = false;
     notifyListeners();

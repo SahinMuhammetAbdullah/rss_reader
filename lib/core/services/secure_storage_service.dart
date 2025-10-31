@@ -1,50 +1,79 @@
-// lib/core/services/secure_storage_service.dart
-
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 class SecureStorageService {
   final _storage = const FlutterSecureStorage();
 
-  static const String _keyServerUrl = 'server_url';
-  static const String _keyUsername = 'username';
-  static const String _keyAuthToken = 'auth_token';
-  static const String _keyIsLoggedIn = 'is_logged_in';
-  
-  Future<String?> getServerUrl() async {
-    return await _storage.read(key: _keyServerUrl);
-  }
+  static const _authTokenKey = 'authToken';
+  static const _usernameKey = 'username';
+  static const _passwordKey =
+      'password'; // Şifreyi saklamak genellikle önerilmez, ancak FreshRSS ClientLogin için gerekli olabilir.
+  static const _urlKey = 'url';
 
-  // Giriş Bilgilerini Kaydetme
   Future<void> saveCredentials({
     required String url,
     required String username,
-    required String authToken, // Artık sadece authToken parametresini bekliyor
+    required String authToken,
+    String? password, // Şifre isteğe bağlı olabilir
   }) async {
-    await _storage.write(key: _keyServerUrl, value: url);
-    await _storage.write(key: _keyUsername, value: username);
-    await _storage.write(key: _keyAuthToken, value: authToken);
-    await _storage.write(key: _keyIsLoggedIn, value: 'true');
+    await _storage.write(key: _urlKey, value: url);
+    await _storage.write(key: _usernameKey, value: username);
+    await _storage.write(key: _authTokenKey, value: authToken);
+    if (password != null) {
+      await _storage.write(key: _passwordKey, value: password);
+    }
   }
 
-  // Giriş Bilgilerini Alma
   Future<Map<String, String?>> getCredentials() async {
-    final url = await _storage.read(key: _keyServerUrl);
-    final authToken = await _storage.read(key: _keyAuthToken);
-
+    final url = await _storage.read(key: _urlKey);
+    final username = await _storage.read(key: _usernameKey);
+    final password = await _storage.read(key: _passwordKey);
+    final authToken = await _storage.read(key: _authTokenKey);
     return {
       'url': url,
-      'authToken': authToken, // Bu etiket kullanılmalı
+      'username': username,
+      'password': password,
+      'authToken': authToken,
     };
   }
 
-  // Oturum Durumunu Kontrol Etme
-  Future<bool> isUserLoggedIn() async {
-    final status = await _storage.read(key: _keyIsLoggedIn);
-    return status == 'true';
+  Future<String?> getServerUrl() async {
+    return await _storage.read(key: _urlKey);
   }
 
-  // Oturumu Kapatma
+  Future<bool> isUserLoggedIn() async {
+    final token = await _storage.read(key: _authTokenKey);
+    final url = await _storage.read(key: _urlKey);
+    final username = await _storage.read(key: _usernameKey);
+    return token != null &&
+        token.isNotEmpty &&
+        url != null &&
+        url.isNotEmpty &&
+        username != null &&
+        username.isNotEmpty;
+  }
+
   Future<void> logout() async {
-    await _storage.deleteAll();
+    await _storage.delete(key: _authTokenKey);
+    await _storage.delete(key: _usernameKey);
+    await _storage.delete(key: _passwordKey);
+    await _storage.delete(key: _urlKey);
+  }
+
+  Future<Map<String, String?>> getCredentialsForRefresh() async {
+    // NOT: Bu metot, sizin getCredentials() metodunuzla aynıdır.
+    // Tüm bilgileri döndürerek Interceptor'ın ihtiyacı olan username ve password'e erişimini sağlar.
+
+    final url = await _storage.read(key: _urlKey);
+    final username = await _storage.read(key: _usernameKey);
+    final password = await _storage.read(key: _passwordKey); // Orijinal şifre
+    final authToken =
+        await _storage.read(key: _authTokenKey); // Eski (süresi dolmuş) token
+
+    return {
+      'url': url,
+      'username': username,
+      'password': password, // <<< KRİTİK: Yenileme için şifre
+      'authToken': authToken,
+    };
   }
 }

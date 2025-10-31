@@ -8,9 +8,14 @@ import 'feed_page.dart';
 import 'settings_page.dart';
 import 'saved_page.dart';
 import 'servers_page.dart';
+
+// Bağımlılıkları manuel oluşturacağımız için bu import'lara ihtiyacımız var:
 import '../../data/repositories/feed_repository.dart';
 import '../../data/datasources/rss_feed_api_data_source.dart';
 import '../../../../core/services/secure_storage_service.dart';
+
+// GetIt kullanmayacağımız için bu import'u kaldırıyoruz
+// import 'package:get_it/get_it.dart';
 
 class FreshRSSApp extends StatelessWidget {
   const FreshRSSApp({super.key});
@@ -41,6 +46,12 @@ class _FreshRSSMobileDesignState extends State<FreshRSSMobileDesign> {
   bool _isInitializing = true;
   late FeedViewModel _viewModel;
 
+  // Bağımlılıkları burada tutmak için değişkenler tanımlayın
+  late SecureStorageService _secureStorageService;
+  late RssFeedApiDataSource _apiDataSource;
+  late FeedRepository _feedRepository;
+
+
   @override
   void initState() {
     super.initState();
@@ -48,13 +59,20 @@ class _FreshRSSMobileDesignState extends State<FreshRSSMobileDesign> {
   }
 
   void _initializeDependenciesAndCheckLogin() async {
-    final apiDataSource = RssFeedApiDataSource();
-    final storageService = SecureStorageService();
-    final repository = FeedRepository(
-      apiDataSource: apiDataSource,
-      storageService: storageService,
+    // 1. SecureStorageService'i oluştur
+    _secureStorageService = SecureStorageService();
+
+    // 2. RssFeedApiDataSource'u oluştur ve secureStorageService'i enjekte et
+    _apiDataSource = RssFeedApiDataSource(storageService: _secureStorageService);
+
+    // 3. FeedRepository'yi oluştur ve apiDataSource ile secureStorageService'i enjekte et
+    _feedRepository = FeedRepository(
+      apiDataSource: _apiDataSource,
+      storageService: _secureStorageService,
     );
-    _viewModel = FeedViewModel(repository: repository);
+
+    // 4. ViewModel'ı oluştur ve repository'i enjekte et
+    _viewModel = FeedViewModel(_feedRepository);
     _viewModel.addListener(_onViewModelChange);
 
     final status = await _viewModel.checkLoginStatus();
@@ -72,14 +90,13 @@ class _FreshRSSMobileDesignState extends State<FreshRSSMobileDesign> {
   @override
   void dispose() {
     _viewModel.removeListener(_onViewModelChange);
+    _viewModel.dispose();
     super.dispose();
   }
 
   void _onViewModelChange() {
     if (!mounted) return;
 
-    // Eğer kullanıcı login görünüyor, ancak Feeds listesi boşsa (logout yapılmış demektir)
-    // Feeds listesi, filtrelenmemiş ham liste olduğu için bu kontrol güvenlidir.
     if (_isLoggedIn && _viewModel.feeds.isEmpty && !_viewModel.isLoading) {
       setState(() {
         _isLoggedIn = false;
@@ -91,6 +108,8 @@ class _FreshRSSMobileDesignState extends State<FreshRSSMobileDesign> {
     setState(() {
       _isLoggedIn = true;
     });
+    // Giriş başarılı olduktan sonra feed verilerini tekrar çek
+    _viewModel.fetchAllRssData();
   }
 
   @override

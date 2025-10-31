@@ -3,27 +3,34 @@
 import 'package:flutter/material.dart';
 
 class FeedItem {
-  final int id;
+  final String id;
   final String title;
-  final String sourceName;
+  
+  // TEK KAYNAK ALANI: Ekrandaki adı taşır.
+  final String source; 
+  
   final int feedId;
   final String time;
   final bool unread;
-  final String category; // Bu hala string olarak kategori adını tutabilir
-  final String url;
+  final String category; 
+  final String? url;
   final int timestamp;
-  
+  final String? image;
+  // ⚠️ Çift tanım olan 'sourceName' KALDIRILDI.
 
   FeedItem({
     required this.id,
     required this.title,
-    required this.sourceName,
+    this.image,
+    // YENİ: Constructor, 'source' bekler.
+    required this.source, 
+    
     required this.feedId,
     required this.time,
     required this.unread,
     required this.category,
     required this.url,
-    required this.timestamp, required String source,
+    required this.timestamp,
   });
 }
 
