@@ -46,7 +46,8 @@ class FeedItemCard extends StatelessWidget {
                         Row(
                           children: [
                             Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 10, vertical: 4),
                               decoration: BoxDecoration(
                                 color: AppColors.primaryIndigo.withOpacity(0.1),
                                 borderRadius: BorderRadius.circular(20),
@@ -64,7 +65,9 @@ class FeedItemCard extends StatelessWidget {
                               // Okunmamış İndikatörü (Mavi nokta)
                               const Padding(
                                 padding: EdgeInsets.only(left: 8.0),
-                                child: CircleAvatar(radius: 4, backgroundColor: AppColors.accentBlue),
+                                child: CircleAvatar(
+                                    radius: 4,
+                                    backgroundColor: AppColors.accentBlue),
                               ),
                           ],
                         ),
@@ -77,16 +80,18 @@ class FeedItemCard extends StatelessWidget {
                             if (urlString != null && urlString != '#') {
                               final uri = Uri.tryParse(urlString);
                               if (uri != null && await canLaunchUrl(uri)) {
-                                await launchUrl(uri, mode: LaunchMode.externalApplication);
-                                
+                                await launchUrl(uri,
+                                    mode: LaunchMode.externalApplication);
+
                                 // Makale açıldıktan sonra otomatik okundu işaretlenir (UX Kuralı)
                                 if (feed.unread) {
                                   // Asenkron olarak çağır
-                                  viewModel.markItemStatus(feed.id, true); 
+                                  viewModel.markItemStatus(feed.id, true);
                                 }
                               } else {
                                 ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(content: Text('Bağlantı açılamıyor.')),
+                                  const SnackBar(
+                                      content: Text('Bağlantı açılamıyor.')),
                                 );
                               }
                             }
@@ -95,8 +100,12 @@ class FeedItemCard extends StatelessWidget {
                             feed.title,
                             style: TextStyle(
                               fontSize: 16,
-                              fontWeight: feed.unread ? FontWeight.w600 : FontWeight.w400,
-                              color: feed.unread ? AppColors.textColorPrimary : AppColors.textColorSecondary,
+                              fontWeight: feed.unread
+                                  ? FontWeight.w600
+                                  : FontWeight.w400,
+                              color: feed.unread
+                                  ? AppColors.textColorPrimary
+                                  : AppColors.textColorSecondary,
                               height: 1.2,
                             ),
                           ),
@@ -121,7 +130,8 @@ class FeedItemCard extends StatelessWidget {
                             const SizedBox(width: 4),
                             Text(
                               feed.time, // ZAMAN BİLGİSİ FORMATLI
-                              style: const TextStyle(fontSize: 12, color: Colors.grey),
+                              style: const TextStyle(
+                                  fontSize: 12, color: Colors.grey),
                             ),
                           ],
                         ),
@@ -141,18 +151,41 @@ class FeedItemCard extends StatelessWidget {
   }
 
   // Zarf ikonunu oluşturur ve okundu/okunmadı durumunu değiştirir
-  Widget _buildReadToggleButton(BuildContext context, FeedViewModel viewModel, FeedItem feed) {
+  Widget _buildReadToggleButton(
+      BuildContext context, FeedViewModel viewModel, FeedItem feed) {
     return Container(
       margin: const EdgeInsets.only(left: 12, top: 4),
       child: IconButton(
         icon: Icon(
-          feed.unread ? LucideIcons.mail : LucideIcons.mailOpen, // Okunmamışsa açık zarf
+          feed.unread
+              ? LucideIcons.mail
+              : LucideIcons.mailOpen, // Okunmamışsa açık zarf
           size: 20,
           color: feed.unread ? AppColors.primaryIndigo : Colors.grey[400],
         ),
-        onPressed: () {
-          // Durumu tersine çevirerek sunucuya gönder (isRead = !feed.unread)
-          viewModel.markItemStatus(feed.id, !feed.unread);
+        onPressed: () async {
+          if (feed.unread) {
+            // Durumu tersine çevirerek sunucuya gönder (isRead = !feed.unread)
+            final urlString = feed.url;
+            if (urlString != null && urlString != '#') {
+              final uri = Uri.tryParse(urlString);
+              if (uri != null && await canLaunchUrl(uri)) {
+                await launchUrl(uri, mode: LaunchMode.externalApplication);
+
+                // Makale açıldıktan sonra otomatik okundu işaretlenir (UX Kuralı)
+                if (feed.unread) {
+                  // Asenkron olarak çağır
+                  viewModel.markItemStatus(feed.id, true);
+                }
+              } else {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Bağlantı açılamıyor.')),
+                );
+              }
+            }
+          } else {}
+
+          //  viewModel.markItemStatus(feed.id, !feed.unread);
         },
         padding: EdgeInsets.zero,
         constraints: const BoxConstraints(),
