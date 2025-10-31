@@ -140,12 +140,7 @@ class RssFeedApiDataSource implements RssFeedDataSource {
 
   // YARDIMCI METOT: ACTION TOKEN ALMA (veya cache'ten kullanma)
   // Bu metot aynı zamanda ana token'ın (Auth=...) geçersiz olması durumunu da ele alır.
-  Future<String> _getActionToken(String apiUrl, String mainToken,
-      {bool forceRefreshMainToken = false}) async {
-    if (_cachedActionToken != null && !forceRefreshMainToken) {
-      return _cachedActionToken!;
-    }
-
+  Future<String> _getActionToken(String apiUrl, String token) async {
     final normalizedUrl = _normalizeUrl(apiUrl);
     final tokenEndpointUrl =
         '$normalizedUrl/p/api/greader.php/reader/api/0/token';
@@ -153,51 +148,22 @@ class RssFeedApiDataSource implements RssFeedDataSource {
     try {
       final response = await _httpClient.get(
         tokenEndpointUrl,
-        options:
-            Options(headers: {'Authorization': 'GoogleLogin auth=$mainToken'}),
+        options: Options(
+          headers: {'Authorization': 'GoogleLogin auth=$token'},
+          validateStatus: (status) => status != null && status < 500,
+        ),
       );
 
       if (response.statusCode == 200 && response.data is String) {
-        final String actionTokenRaw = response.data.toString().trim();
-        final String actionToken =
-            actionTokenRaw.replaceAll(RegExp(r'[Z]+$'), '');
-        _cachedActionToken = actionToken;
-        return actionToken;
-      }
-
-      // Eğer Action Token alma sırasında 401 Unauthorized dönüyorsa, Main Token geçersiz demektir.
-      if (response.statusCode == 401 || forceRefreshMainToken) {
-        // Main Token'ı yenilemeye çalış
-        final credentials = await _storageService.getCredentials();
-        if (credentials['username'] != null &&
-            credentials['password'] != null &&
-            credentials['url'] != null) {
-          print(
-              '401 alındı veya Ana Token yenilenmeye zorlandı. Yeni Ana Token çekiliyor...');
-          final newMainToken = await _getNewMainToken(credentials['url']!,
-              credentials['username']!, credentials['password']!);
-          print(
-              'Yeni Ana Token başarıyla çekildi. Action Token tekrar alınıyor...');
-
-          // Yeni Ana Token ile Action Token'ı tekrar çek
-          _cachedActionToken = null; // Eski Action Token'ı temizle
-          return await _getActionToken(
-              apiUrl, newMainToken); // Yeni Main Token ile tekrar dene
-        } else {
-          throw Exception('Kayıtlı kimlik bilgileri bulunamadı veya eksik.');
+        final String actionToken = response.data.toString().trim();
+        if (actionToken.isNotEmpty) {
+          if (kDebugMode) print('✅ Action Token başarıyla alındı.');
+          return actionToken;
         }
       }
-
-      throw Exception(
-          'Action token alınamadı (Durum Kodu: ${response.statusCode})');
+      throw Exception('Action token alınamadı: Sunucu geçersiz yanıt verdi.');
     } on DioException catch (e) {
-      // DioException durumunda 401 ise veya zorla yenileme isteniyorsa
-      if (e.response?.statusCode == 401 && !forceRefreshMainToken) {
-        print('Dio Hatası (401) alındı. Ana Token yenilenmeye zorlanıyor...');
-        return await _getActionToken(apiUrl, mainToken,
-            forceRefreshMainToken: true); // Ana Token'ı yenilemeye zorla
-      }
-      throw Exception('Action token alınırken hata oluştu (${e.message})');
+      throw Exception('Action token alınırken Dio Hatası: ${e.message}');
     }
   }
 
@@ -473,7 +439,7 @@ class RssFeedApiDataSource implements RssFeedDataSource {
       final response = await _performApiCall(
         (currentMainToken) async => await _httpClient.get(
           streamEndpointUrl,
-          queryParameters: {'n': 200, 'r': 'd'},
+          queryParameters: {'n': 10000, 'r': 'd'},
           options: Options(
             headers: {'Authorization': 'GoogleLogin auth=$currentMainToken'},
             validateStatus: (status) => status != null && status < 500,
@@ -558,85 +524,85 @@ class RssFeedApiDataSource implements RssFeedDataSource {
     final endpointUrl =
         '$normalizedUrl/p/api/greader.php/reader/api/0/edit-tag';
 
-    final credentials = await _storageService.getCredentials();
-    final username = credentials['username']!;
-    final password = credentials['password']!;
+    // Action Token'ı çek. Eğer Main Token geçersizse, _getActionToken yenilemeyi dener.
+    final String actionToken = await _getActionToken(apiUrl, token);
 
-    // _getActionToken çağrısını _performApiCall içerisine alıyoruz,
-    // böylece Action Token alma işlemi de Ana Token'ın geçerliliğini kontrol edip gerekirse yenileyebilir.
-    await _performApiCall(
-      (currentMainToken) async {
-        final String actionToken = await _getActionToken(apiUrl,
-            currentMainToken); // Bu çağrı kendi içinde token yenileme mantığına sahip
 
-        final String tagToModify = 'user/-/state/com.google/read';
-        final String itemIdForApi = itemId;
+    // Makale durumu etiketi: Bu etiketi eklemek/kaldırmak makaleyi okundu/okunmadı yapar.
+    final String tagToModify = 'user/-/state/com.google/read';
 
-        final Map<String, dynamic> requestData = {
-          'T': actionToken,
-          'i': itemIdForApi,
-        };
+    final Map<String, dynamic> requestData = {
+      'T': actionToken,
+      'i': itemId, // Makale ID'si
+    };
 
-        if (isRead) {
-          requestData['a'] = tagToModify;
-        } else {
-          requestData['r'] = tagToModify;
+    if (isRead) {
+      // Okundu olarak işaretle: 'read' etiketini EKLE (add tag)
+      requestData['a'] = tagToModify;
+    } else {
+      // Okunmadı olarak işaretle: 'read' etiketini KALDIR (remove tag)
+      requestData['r'] = tagToModify;
+    }
+
+    try {
+      final response = await _httpClient.post(
+        endpointUrl,
+        data: requestData,
+        options: Options(
+          contentType: Headers.formUrlEncodedContentType,
+          headers: {'Authorization': 'GoogleLogin auth=$token'},
+          validateStatus: (status) => status != null && status < 500,
+        ),
+      );
+
+      if (response.statusCode != 200) {
+        if (response.statusCode == 401) {
+          throw Exception('Token geçersiz. Lütfen tekrar giriş yapın.');
         }
-
-        return await _httpClient.post(
-          endpointUrl,
-          data: requestData,
-          options: Options(
-            contentType: Headers.formUrlEncodedContentType,
-            headers: {'Authorization': 'GoogleLogin auth=$currentMainToken'},
-          ),
-        );
-      },
-      token,
-      apiUrl,
-      username,
-      password,
-    );
+        throw Exception(
+            'Makale durumu güncellenemedi. Durum Kodu: ${response.statusCode}');
+      }
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        throw Exception('Token geçersiz. Lütfen tekrar giriş yapın.');
+      }
+      throw Exception('API Hatası (Mark Status): ${e.message}');
+    }
   }
 
-  // ===============================================================
-  // 5. Mark All As Read (Toplu Okundu) (GRAPI: mark-all-as-read)
-  // ===============================================================
+// ===============================================================
+// 5. Mark All As Read (Toplu Okundu) (GRAPI: mark-all-as-read)
+// ===============================================================
   @override
   Future<void> markAllAsRead(String apiUrl, String token) async {
-    final normalizedUrl = _normalizeUrl(apiUrl);
     final endpointUrl =
-        '$normalizedUrl/p/api/greader.php/reader/api/0/mark-all-as-read';
+        '$apiUrl/p/api/greader.php/reader/api/0/mark-all-as-read';
+    final actionToken =
+        await _getActionToken(apiUrl, token); // Action Token çekilir
 
-    final credentials = await _storageService.getCredentials();
-    final username = credentials['username']!;
-    final password = credentials['password']!;
+    try {
+      final response = await _httpClient.post(
+        endpointUrl,
+        data: {
+          'T': actionToken,
+          's': 'user/-/state/com.google/reading-list', // Tüm akışı işaretle
+          'ts': (DateTime.now().millisecondsSinceEpoch * 1000)
+              .toString(), // Zaman damgası
+        },
+        options: Options(
+          contentType: Headers.formUrlEncodedContentType,
+          headers: {'Authorization': 'GoogleLogin auth=$token'},
+        ),
+      );
 
-    await _performApiCall(
-      (currentMainToken) async {
-        final String actionToken =
-            await _getActionToken(apiUrl, currentMainToken);
-
-        final String timestampInNanoseconds =
-            (DateTime.now().millisecondsSinceEpoch * 1000).toString();
-
-        return await _httpClient.post(
-          endpointUrl,
-          data: {
-            'T': actionToken,
-            's': 'user/-/state/com.google/reading-list',
-            'ts': timestampInNanoseconds,
-          },
-          options: Options(
-            contentType: Headers.formUrlEncodedContentType,
-            headers: {'Authorization': 'GoogleLogin auth=$currentMainToken'},
-          ),
-        );
-      },
-      token,
-      apiUrl,
-      username,
-      password,
-    );
+      if (response.statusCode == 200 &&
+          response.data.toString().trim() == 'OK') {
+        print('✅ TÜM FEEDLER GRAPI ÜZERİNDEN OKUNDU OLARAK İŞARETLENDİ.');
+        return;
+      }
+      throw Exception('Toplu okundu işareti başarısız: Yanıt beklenmedik.');
+    } on DioException {
+      throw Exception('Toplu okundu işaretleme hatası.');
+    }
   }
 }
