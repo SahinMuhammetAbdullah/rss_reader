@@ -184,7 +184,9 @@ class FeedItemCard extends StatelessWidget {
             //     );
             //   }
             // }
-          } else {}
+          } else {
+            viewModel.markItemStatus(feed.id, false);
+          }
 
           //  viewModel.markItemStatus(feed.id, !feed.unread);
         },
