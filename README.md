@@ -33,5 +33,5 @@ lib/
 ├── l10n/
 │   └── app_tr.arb                    // Lokalizasyon (Şimdilik atlıyoruz)
 └── main.dart                       // Başlangıç dosyası
-
 ---
+ilk 
