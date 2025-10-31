@@ -27,7 +27,7 @@ class FeedRepository {
           url: url,
           username: username,
           authToken: token,
-          password: password // <<< EKLENDİ
+          originalPassword: password // <<< EKLENDİ
           );
       return true;
     } catch (e) {

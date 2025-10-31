@@ -13,13 +13,13 @@ class SecureStorageService {
     required String url,
     required String username,
     required String authToken,
-    String? password, // Şifre isteğe bağlı olabilir
+    required String originalPassword, // Şifre isteğe bağlı olabilir
   }) async {
     await _storage.write(key: _urlKey, value: url);
     await _storage.write(key: _usernameKey, value: username);
     await _storage.write(key: _authTokenKey, value: authToken);
-    if (password != null) {
-      await _storage.write(key: _passwordKey, value: password);
+    if (originalPassword != null) {
+      await _storage.write(key: _passwordKey, value: originalPassword);
     }
   }
 
