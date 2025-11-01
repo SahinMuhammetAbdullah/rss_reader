@@ -134,7 +134,7 @@ class _FreshRSSMobileDesignState extends State<FreshRSSMobileDesign> {
           case 'settings':
             return const SettingsPage();
 
-          case 'servers':
+          case 'subscriptions':
             return const SubscriptionsPage();
 
           case 'saved':
