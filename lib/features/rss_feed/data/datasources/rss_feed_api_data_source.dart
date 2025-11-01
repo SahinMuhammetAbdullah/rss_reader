@@ -757,22 +757,29 @@ class RssFeedApiDataSource implements RssFeedDataSource {
   @override
   Future<void> deleteCategory(
       String apiUrl, String token, int categoryId) async {
-    // Kategori adını bulmak için cache'i kullanmalıyız.
+    // 1. Kategori Adını Cache'ten Bul
     final categoryInCache =
         _categoriesCache.firstWhereOrNull((cat) => cat.id == categoryId);
     final categoryName = categoryInCache?.name;
 
-    if (categoryName == null || categoryName == 'Hepsi') {
+    if (categoryName == null ||
+        categoryName.trim().isEmpty ||
+        categoryName == 'Hepsi') {
+      // 'Genel' veya 'Hepsi' gibi sistem kategorilerini silmeyi engelle
       throw Exception(
-          'Kategori silme başarısız: Geçersiz veya "Hepsi" kategorisi.');
+          'Kategori silme başarısız: Geçersiz veya sistem kategorisi ("Hepsi"/"Genel").');
     }
 
+    // GRAPI Etiket Formatı (Stream ID olarak kullanılır)
     final categoryTag = 'user/-/label/$categoryName';
     final normalizedUrl = _normalizeUrl(apiUrl);
     final endpointUrl =
         '$normalizedUrl/p/api/greader.php/reader/api/0/edit-tag';
 
+    // 🔑 Action Token al
     final actionToken = await _getActionToken(apiUrl, token);
+
+    print('📤 Silme isteği gönderiliyor: $categoryName ($categoryTag)');
 
     try {
       final response = await _httpClient.post(
@@ -780,31 +787,46 @@ class RssFeedApiDataSource implements RssFeedDataSource {
         data: {
           'T': actionToken,
           's':
-              categoryTag, // Silinecek etiketi (kategoriyi) Stream olarak gönder
-          'ac':
-              'disable-tag', // Aksiyon: Kategori Sil (FreshRSS'e özel aksiyon)
+              categoryTag, // KRİTİK: Silinecek kategori etiketi Stream ID olarak
+          'ac': 'disable-tag', // Aksiyon: Kategori Sil
         },
         options: Options(
           contentType: Headers.formUrlEncodedContentType,
           headers: {'Authorization': 'GoogleLogin auth=$token'},
+          validateStatus: (status) =>
+              status != null &&
+              (status == 200 || status == 302), // 200 veya 302'yi kabul et
         ),
       );
 
-      if (response.statusCode == 200 &&
-          response.data.toString().trim() == 'OK') {
-        return;
+      final responseData = response.data.toString().trim();
+
+      if (response.statusCode == 200 || response.statusCode == 302) {
+        if (responseData == 'OK' || response.statusCode == 302) {
+          print('✅ Kategori başarıyla silme isteğine gönderildi.');
+
+          // BAŞARILI DURUM: Yerel cache'ten kaldır
+          if (categoryInCache != null) {
+            _categoriesCache.removeWhere((cat) => cat.id == categoryId);
+          }
+
+          return;
+        }
       }
 
+      // Başarısız POST yanıtı (örn. 200 OK geldi ama body boş)
+      print('❌ Silme başarısız: Sunucudan OK alınamadı. Yanıt: $responseData');
       throw Exception('Kategori silme başarısız: Sunucu yanıtı beklenmedik.');
     } on DioException catch (e) {
-      if (e.response?.statusCode == 401) {
-        throw Exception(
-            'Kategori silme yetkilendirmesi başarısız (401). Lütfen tekrar giriş yapın.');
+      final status = e.response?.statusCode;
+      if (status == 401 || status == 403) {
+        throw Exception('Kategori silme yetkilendirmesi başarısız (401/403).');
       }
       throw Exception('API Hatası (Kategori Silme): ${e.message}');
     }
   }
+
   String getFeedNameFromCache(int feedId) {
     return _feedIdToFeedName[feedId] ?? 'Bilinmeyen Kaynak';
-}
+  }
 }

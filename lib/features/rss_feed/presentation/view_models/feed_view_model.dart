@@ -384,7 +384,16 @@ class FeedViewModel extends ChangeNotifier {
   Future<void> deleteCategory(int categoryId) async {
     // Kategori boşsa kontrolü (Bu kısım ViewModel'in içinde olmalıdır)
     final category = categories.firstWhereOrNull((cat) => cat.id == categoryId);
-
+    final categoryToDelete =
+        categories.firstWhereOrNull((cat) => cat.id == categoryId);
+    if (categoryToDelete == null ||
+        categoryToDelete.id == 0 ||
+        categoryToDelete.count > 0) {
+      _errorMessage =
+          "Sadece boş kategoriler silinebilir. Lütfen önce abonelikleri taşıyın.";
+      notifyListeners();
+      return;
+    }
     if (category == null || category.id == 0) return;
     if (category.count > 0) {
       _errorMessage =
@@ -398,22 +407,30 @@ class FeedViewModel extends ChangeNotifier {
     notifyListeners();
 
     try {
-      // KRİTİK: Yetkilendirme bilgilerini çek
       final credentials = await repository.getCredentials();
       final apiUrl = credentials['url']!;
       final token = credentials['authToken']!;
 
-      // ⚠️ DÜZELTME: Repository'nin beklediği 3 zorunlu parametreyi iletiyoruz
+      // 1. API ÜZERİNDEN SİLME İSTEĞİNİ YAP
       await repository.deleteCategory(apiUrl, token, categoryId);
 
-      // Başarılı senkronizasyon
-      await fetchAllRssData();
+      // 2. YEREL CACHE'TEN ANINDA KALDIR (UX iyileştirmesi)
+      if (categoryToDelete != null) {
+        _categories.remove(categoryToDelete);
+      }
+      notifyListeners(); // UI'ı anında güncelle
+
+      // 3. 🚨 KRİTİK: 1 SANİYE BEKLE VE TAZELİĞİ ZORLA (Sunucu Cache Sorunu İçin)
+      await Future.delayed(const Duration(milliseconds: 1000));
+      await fetchAllRssData(); // Taze veriyi çek (Bu, silinmişse geri getirmemeli)
+
+      // Final kontrolü burada yapılabilir.
       _errorMessage = null;
     } catch (e) {
       _errorMessage = "Kategori silinemedi: ${e.toString()}";
     } finally {
       _isLoading = false;
-      notifyListeners();
+      notifyListeners(); // Final UI güncellemesi
     }
   }
 }

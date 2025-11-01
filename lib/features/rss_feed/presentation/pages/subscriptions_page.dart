@@ -187,16 +187,25 @@ class _SubscriptionsPageState extends State<SubscriptionsPage> {
                   // Kategori Silme Butonu (Sadece boşsa)
                   trailing: isCategoryEmpty && cat.id != 'Genel'.hashCode
                       ? IconButton(
-                          icon:
-                              const Icon(LucideIcons.trash2, color: Colors.red),
+                          icon: const Icon(LucideIcons.trash2, color: Colors.red),
                           onPressed: () async {
-                            // KRİTİK: Silme işlemi tetikleniyor.
-                            await viewModel.deleteCategory(cat.id);
-
-                            // Kullanıcıya geri bildirim ve hata durumunu göster
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(content: Text(viewModel.errorMessage)),
+                            // Diyalog üzerinden onayı al (gövdesi eksik)
+                            final confirmed = await showDialog<bool>(
+                                context: context,
+                                builder: (ctx) => AlertDialog(
+                                    title: const Text('Kategori Silme Onayı'),
+                                    content: Text('${cat.name} kategorisini silmek istediğinizden emin misiniz?'),
+                                    actions: [
+                                        TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('İptal')),
+                                        TextButton(onPressed: () => Navigator.of(ctx).pop(true), child: const Text('Sil', style: TextStyle(color: Colors.red))),
+                                    ],
+                                )
                             );
+                            
+                            if (confirmed == true) {
+                                await viewModel.deleteCategory(cat.id);
+                                // Hata mesajı otomatik olarak ViewModel'den gelecektir.
+                            }
                           },
                         )
                       : null,
