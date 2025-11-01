@@ -35,7 +35,7 @@ class BottomNavBar extends StatelessWidget {
           children: [
             _buildNavItem(context, LucideIcons.home, 'Ana Sayfa', 'home', viewModel),
             _buildNavItem(context, LucideIcons.bookmark, 'Kaydedilenler', 'saved', viewModel),
-            _buildNavItem(context, LucideIcons.server, 'Abonelikler', 'subscriptions', viewModel),
+            _buildNavItem(context, LucideIcons.podcast, 'Abonelikler', 'subscriptions', viewModel),
             _buildNavItem(context, LucideIcons.settings, 'Ayarlar', 'settings', viewModel),
           ],
         ),
