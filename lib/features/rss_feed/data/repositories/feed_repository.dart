@@ -111,4 +111,17 @@ class FeedRepository {
     await apiDataSource.setFeedCategory(apiUrl, token, feedId, newCategoryName,
         oldCategoryName: oldCategoryName);
   }
+
+  Future<void> deleteCategory(
+      String apiUrl, String token, int categoryId) async {
+    // Bu metot, apiDataSource'u çağırmak için 3 parametre (apiUrl, token, categoryId) almalıdır.
+    await apiDataSource.deleteCategory(apiUrl, token, categoryId);
+  }
+
+  String getFeedNameById(int feedId) {
+    // DataSource içindeki cache'e erişmek için DataSource'ta bir getter olmalıdır.
+    // Varsayıyoruz ki DataSource'ta bir getter var veya harita public yapıldı.
+    // Geçici olarak bu metodu DataSource'a taşıyalım.
+    return apiDataSource.getFeedNameFromCache(feedId);
+  }
 }

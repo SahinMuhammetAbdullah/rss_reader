@@ -93,9 +93,9 @@ class _SubscriptionsPageState extends State<SubscriptionsPage> {
   @override
   Widget build(BuildContext context) {
     final viewModel = Provider.of<FeedViewModel>(context);
+
     final managementCategories =
         viewModel.categories.where((cat) => cat.id != 0).toList();
-
     return Scaffold(
       appBar: AppBar(
         title: const Text('Abonelik Yönetimi',
@@ -120,10 +120,13 @@ class _SubscriptionsPageState extends State<SubscriptionsPage> {
                 DropdownButtonFormField<String>(
                   value: _selectedCategoryName,
                   hint: const Text('Kategori Seç (Opsiyonel)'),
-                  items: _categoryNames.map((name) {
+                  items:
+                      viewModel.categories // ViewModel'den gelen listeyi kullan
+                          .where((cat) => cat.id != 0)
+                          .map((cat) {
                     return DropdownMenuItem<String>(
-                      value: name,
-                      child: Text(name),
+                      value: cat.name,
+                      child: Text(cat.name),
                     );
                   }).toList(),
                   onChanged: (value) {
@@ -179,21 +182,20 @@ class _SubscriptionsPageState extends State<SubscriptionsPage> {
                 return ExpansionTile(
                   leading: Icon(cat.icon, color: AppColors.primaryIndigo),
                   title: Text('${cat.name} (${feedsInCat.length})'),
-                  initiallyExpanded: feedsInCat.isNotEmpty,
+                  initiallyExpanded: false,
 
                   // Kategori Silme Butonu (Sadece boşsa)
-                  trailing: isCategoryEmpty
+                  trailing: isCategoryEmpty && cat.id != 'Genel'.hashCode
                       ? IconButton(
                           icon:
                               const Icon(LucideIcons.trash2, color: Colors.red),
-                          onPressed: () {
-                            // TODO: Kategori silme API'si FreshRSS'te edit-tag ile yapılır.
-                            // Şu an sadece feed'leri yönetiyoruz. Kategori silme şimdilik UX'i basitleştirmek adına atlanmıştır.
-                            // Kullanıcıya kategori silmenin sadece feed'i kaldırmakla yapıldığı bilgisi verilebilir.
+                          onPressed: () async {
+                            // KRİTİK: Silme işlemi tetikleniyor.
+                            await viewModel.deleteCategory(cat.id);
+
+                            // Kullanıcıya geri bildirim ve hata durumunu göster
                             ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                  content: Text(
-                                      'Kategoriler, içindeki tüm abonelikler silinince otomatik kaybolur (FreshRSS kuralı).')),
+                              SnackBar(content: Text(viewModel.errorMessage)),
                             );
                           },
                         )

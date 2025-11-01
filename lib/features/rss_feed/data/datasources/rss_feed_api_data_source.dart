@@ -71,6 +71,7 @@ abstract class RssFeedDataSource {
   Future<void> setFeedCategory(
       String apiUrl, String token, int feedId, String newCategoryName,
       {String? oldCategoryName});
+  Future<void> deleteCategory(String apiUrl, String token, int categoryId);
 }
 
 // =================================================================
@@ -102,6 +103,13 @@ class RssFeedApiDataSource implements RssFeedDataSource {
 
   String? _getStreamId(int feedId) {
     return _feedIdToStreamId[feedId];
+  }
+
+  String? _getCategoryNameFromId(int categoryId) {
+    // Burada _categoriesCache'i kullanın.
+    final category =
+        _categoriesCache.firstWhereOrNull((cat) => cat.id == categoryId);
+    return category?.name;
   }
 
   // YARDIMCI METOT: CLIENTLOGIN İLE YENİ ANA TOKEN ÇEKME
@@ -636,25 +644,46 @@ class RssFeedApiDataSource implements RssFeedDataSource {
 
   @override
   Future<void> unsubscribeFeed(String apiUrl, String token, int feedId) async {
-    final streamId = _getStreamId(feedId);
+    final streamId = _getStreamId(feedId); // Stream ID'yi al
     if (streamId == null) throw Exception('Feed Stream ID bulunamadı.');
 
     final normalizedUrl = _normalizeUrl(apiUrl);
     final endpointUrl =
         '$normalizedUrl/p/api/greader.php/reader/api/0/subscription/edit';
 
+    // 1. Action Token'ı çek (Her zaman yenileme denemesi dahil)
     final actionToken = await _getActionToken(apiUrl, token);
-    // ... (API çağrısı) ...
-    final response = await _httpClient.post(
-      endpointUrl,
-      data: {
-        'T': actionToken,
-        's': streamId, // Stream ID (Feed ID)
-        'ac': 'unsubscribe', // Aksiyon: Abonelikten çık
-      },
-      // ... (Options) ...
-    );
-    // ... (Hata kontrolü) ...
+
+    try {
+      final response = await _httpClient.post(
+        endpointUrl,
+        data: {
+          'T': actionToken, // KRİTİK: Action Token'ı T parametresiyle gönder
+          's': streamId, // Stream ID (Feed ID)
+          'ac': 'unsubscribe', // Aksiyon: Abonelikten çık
+        },
+        options: Options(
+          contentType: Headers.formUrlEncodedContentType,
+          headers: {
+            'Authorization': 'GoogleLogin auth=$token'
+          }, // Ana yetkilendirme
+          validateStatus: (status) => status != null && status < 500,
+        ),
+      );
+
+      if (response.statusCode == 200 &&
+          response.data.toString().trim() == 'OK') {
+        return; // Başarılı
+      }
+
+      throw Exception('Abonelikten çıkma başarısız: Yanıt beklenmedik.');
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        throw Exception(
+            'Abonelikten çıkma yetkilendirmesi başarısız. Lütfen tekrar giriş yapın.');
+      }
+      throw Exception('API Hatası (Unsubscribe): ${e.message}');
+    }
   }
 
   @override
@@ -664,22 +693,118 @@ class RssFeedApiDataSource implements RssFeedDataSource {
     final streamId = _getStreamId(feedId);
     if (streamId == null) throw Exception('Feed Stream ID bulunamadı.');
 
+    // GRAPI Etiket Formatları
+    final oldTag = 'user/-/label/$oldCategoryName';
+    final newTag = 'user/-/label/$newCategoryName';
+
     final normalizedUrl = _normalizeUrl(apiUrl);
     final endpointUrl =
         '$normalizedUrl/p/api/greader.php/reader/api/0/edit-tag';
 
-    final newTag = 'user/-/label/$newCategoryName';
-    final Map<String, dynamic> requestData = {
-      'T': await _getActionToken(apiUrl, token),
-      'i': streamId, // Stream ID
-      'a': newTag, // Yeni etiketi EKLE
-    };
+    final actionToken =
+        await _getActionToken(apiUrl, token); // Action Token'ı al
 
-    // Eski kategoriyi kaldırma işlemi
-    if (oldCategoryName != null && oldCategoryName != 'Genel') {
-      final oldTag = 'user/-/label/$oldCategoryName';
-      requestData['r'] = oldTag; // Eski etiketi KALDIR
+    try {
+      // 1. ADIM: Eski etiketi kaldır (unsubscribe)
+      await _httpClient.post(
+        endpointUrl,
+        data: {
+          'T': actionToken,
+          's': streamId,
+          'ac': 'unsubscribe',
+          't': oldTag, // Eski etiketi kaldır
+        },
+        options: Options(
+          contentType: Headers.formUrlEncodedContentType,
+          headers: {
+            'Authorization': 'GoogleLogin auth=$token'
+          }, // Ana yetkilendirme
+          validateStatus: (status) => status != null && status < 500,
+        ),
+      );
+
+      // 2. ADIM: Yeni etiketi ekle (subscribe)
+      final response = await _httpClient.post(
+        endpointUrl,
+        data: {
+          'T': actionToken,
+          's': streamId,
+          'ac': 'subscribe',
+          't': newTag, // Yeni etiketi ekle
+        },
+        options: Options(
+          contentType: Headers.formUrlEncodedContentType,
+          headers: {
+            'Authorization': 'GoogleLogin auth=$token'
+          }, // Ana yetkilendirme
+          validateStatus: (status) => status != null && status < 500,
+        ),
+      );
+
+      if (response.statusCode != 200 ||
+          response.data.toString().trim() != 'OK') {
+        throw Exception('Kategori atama başarısız: Sunucu yanıtı beklenmedik.');
+      }
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        throw Exception(
+            'Kategori taşıma yetkilendirmesi başarısız (401). Lütfen tekrar giriş yapın.');
+      }
+      throw Exception('API Hatası (Kategori Taşıma): ${e.message}');
     }
-    // ... (API çağrısı ve hata kontrolü) ...
   }
+
+  @override
+  Future<void> deleteCategory(
+      String apiUrl, String token, int categoryId) async {
+    // Kategori adını bulmak için cache'i kullanmalıyız.
+    final categoryInCache =
+        _categoriesCache.firstWhereOrNull((cat) => cat.id == categoryId);
+    final categoryName = categoryInCache?.name;
+
+    if (categoryName == null || categoryName == 'Hepsi') {
+      throw Exception(
+          'Kategori silme başarısız: Geçersiz veya "Hepsi" kategorisi.');
+    }
+
+    final categoryTag = 'user/-/label/$categoryName';
+    final normalizedUrl = _normalizeUrl(apiUrl);
+    final endpointUrl =
+        '$normalizedUrl/p/api/greader.php/reader/api/0/edit-tag';
+
+    final actionToken = await _getActionToken(apiUrl, token);
+
+    try {
+      final response = await _httpClient.post(
+        endpointUrl,
+        data: {
+          'T': actionToken,
+          's':
+              categoryTag, // Silinecek etiketi (kategoriyi) Stream olarak gönder
+          'ac':
+              'disable-tag', // Aksiyon: Kategori Sil (FreshRSS'e özel aksiyon)
+        },
+        options: Options(
+          contentType: Headers.formUrlEncodedContentType,
+          headers: {'Authorization': 'GoogleLogin auth=$token'},
+        ),
+      );
+
+      if (response.statusCode == 200 &&
+          response.data.toString().trim() == 'OK') {
+        return;
+      }
+
+      throw Exception('Kategori silme başarısız: Sunucu yanıtı beklenmedik.');
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        throw Exception(
+            'Kategori silme yetkilendirmesi başarısız (401). Lütfen tekrar giriş yapın.');
+      }
+      throw Exception('API Hatası (Kategori Silme): ${e.message}');
+    }
+  }
+  String getFeedNameFromCache(int feedId) {
+    return _feedIdToFeedName[feedId] ?? 'Bilinmeyen Kaynak';
+}
 }
