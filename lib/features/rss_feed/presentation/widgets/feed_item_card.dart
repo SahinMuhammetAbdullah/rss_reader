@@ -166,29 +166,11 @@ class FeedItemCard extends StatelessWidget {
         onPressed: () async {
           if (feed.unread) {
             // Durumu tersine çevirerek sunucuya gönder (isRead = !feed.unread)
-            final urlString = feed.url;
-            if (feed.unread) {
-              // Asenkron olarak çağır
-              viewModel.markItemStatus(feed.id, true);
-            }
-            // if (urlString != null && urlString != '#') {
-            //   final uri = Uri.tryParse(urlString);
-            //   if (uri != null && await canLaunchUrl(uri)) {
-            //     await launchUrl(uri, mode: LaunchMode.externalApplication);
 
-            //     // Makale açıldıktan sonra otomatik okundu işaretlenir (UX Kuralı)
-
-            //   } else {
-            //     ScaffoldMessenger.of(context).showSnackBar(
-            //       const SnackBar(content: Text('Bağlantı açılamıyor.')),
-            //     );
-            //   }
-            // }
+            viewModel.markItemStatus(feed.id, true);
           } else {
             viewModel.markItemStatus(feed.id, false);
           }
-
-          //  viewModel.markItemStatus(feed.id, !feed.unread);
         },
         padding: EdgeInsets.zero,
         constraints: const BoxConstraints(),
