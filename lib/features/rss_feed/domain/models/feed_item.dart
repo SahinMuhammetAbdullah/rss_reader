@@ -5,14 +5,14 @@ import 'package:flutter/material.dart';
 class FeedItem {
   final String id;
   final String title;
-  
+
   // TEK KAYNAK ALANI: Ekrandaki adı taşır.
-  final String source; 
-  
+  final String source;
+
   final int feedId;
   final String time;
   final bool unread;
-  final String category; 
+  final String category;
   final String? url;
   final int timestamp;
   final String? image;
@@ -23,8 +23,7 @@ class FeedItem {
     required this.title,
     this.image,
     // YENİ: Constructor, 'source' bekler.
-    required this.source, 
-    
+    required this.source,
     required this.feedId,
     required this.time,
     required this.unread,
@@ -62,5 +61,19 @@ class Server {
     required this.url,
     required this.status,
     required this.feeds,
+  });
+}
+
+class FeedSubscription {
+  final int feedId;
+  final String title;
+  final String categoryName;
+  final int categoryId;
+
+  FeedSubscription({
+    required this.feedId,
+    required this.title,
+    required this.categoryName,
+    required this.categoryId,
   });
 }

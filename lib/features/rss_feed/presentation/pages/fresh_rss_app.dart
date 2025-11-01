@@ -8,6 +8,7 @@ import 'feed_page.dart';
 import 'settings_page.dart';
 import 'saved_page.dart';
 import 'servers_page.dart';
+import 'subscriptions_page.dart';
 
 // Bağımlılıkları manuel oluşturacağımız için bu import'lara ihtiyacımız var:
 import '../../data/repositories/feed_repository.dart';
@@ -134,7 +135,7 @@ class _FreshRSSMobileDesignState extends State<FreshRSSMobileDesign> {
             return const SettingsPage();
 
           case 'servers':
-            return const ServersPage();
+            return const SubscriptionsPage();
 
           case 'saved':
             return const SavedPage();

@@ -65,6 +65,12 @@ abstract class RssFeedDataSource {
   Future<void> markItemStatus(
       String apiUrl, String token, String itemId, bool isRead);
   Future<void> markAllAsRead(String apiUrl, String token);
+  Future<void> addSubscription(
+      String apiUrl, String token, String feedUrl); // YENİ
+  Future<void> unsubscribeFeed(String apiUrl, String token, int feedId);
+  Future<void> setFeedCategory(
+      String apiUrl, String token, int feedId, String newCategoryName,
+      {String? oldCategoryName});
 }
 
 // =================================================================
@@ -76,7 +82,7 @@ class RssFeedApiDataSource implements RssFeedDataSource {
   List<RssCategory> _categoriesCache = [];
   Map<int, int> _feedIdToGroupId = {};
   Map<int, String> _feedIdToFeedName = {};
-
+  Map<int, String> _feedIdToStreamId = {};
   String? _cachedActionToken;
 
   RssFeedApiDataSource({required SecureStorageService storageService})
@@ -92,6 +98,10 @@ class RssFeedApiDataSource implements RssFeedDataSource {
     }
     normalizedUrl = normalizedUrl.replaceFirst('http://', 'https://');
     return normalizedUrl;
+  }
+
+  String? _getStreamId(int feedId) {
+    return _feedIdToStreamId[feedId];
   }
 
   // YARDIMCI METOT: CLIENTLOGIN İLE YENİ ANA TOKEN ÇEKME
@@ -290,33 +300,13 @@ class RssFeedApiDataSource implements RssFeedDataSource {
     final subscriptionsEndpointUrl =
         '$normalizedUrl/p/api/greader.php/reader/api/0/subscription/list?output=json';
 
-    final credentials = await _storageService.getCredentials();
-    final username = credentials['username']!;
-    final password = credentials['password']!;
-
     try {
-      final tagsResponse = await _performApiCall(
-        (currentMainToken) async => await _httpClient.get(tagsEndpointUrl,
-            options: Options(headers: {
-              'Authorization': 'GoogleLogin auth=$currentMainToken'
-            })),
-        token,
-        apiUrl,
-        username,
-        password,
-      );
+      final headers = {'Authorization': 'GoogleLogin auth=$token'};
 
-      final subscriptionsResponse = await _performApiCall(
-        (currentMainToken) async => await _httpClient.get(
-            subscriptionsEndpointUrl,
-            options: Options(headers: {
-              'Authorization': 'GoogleLogin auth=$currentMainToken'
-            })),
-        token,
-        apiUrl,
-        username,
-        password,
-      );
+      final tagsResponse = await _httpClient.get(tagsEndpointUrl,
+          options: Options(headers: headers));
+      final subscriptionsResponse = await _httpClient
+          .get(subscriptionsEndpointUrl, options: Options(headers: headers));
 
       if (tagsResponse.statusCode == 200 &&
           subscriptionsResponse.statusCode == 200) {
@@ -324,18 +314,23 @@ class RssFeedApiDataSource implements RssFeedDataSource {
         final subscriptionsJson =
             subscriptionsResponse.data['subscriptions'] as List? ?? [];
 
+        // Önbellekleri temizle
         _feedIdToFeedName.clear();
         _feedIdToGroupId.clear();
+        _feedIdToStreamId.clear(); // Stream ID Cache'i de temizleniyor
 
+        // --- 1. Feed Adı ve ID Eşleşmesini Kur (Hata Çözümü: Kapsam) ---
         for (var sub in subscriptionsJson) {
           final String feedIdStr = sub['id'] as String? ?? '';
           final String feedTitle =
               sub['title'] as String? ?? 'Bilinmeyen Kaynak';
-          final int? parsedFeedId =
-              int.tryParse(feedIdStr.replaceAll('feed/', ''));
-          final int feedId = parsedFeedId ?? feedIdStr.hashCode;
 
-          _feedIdToFeedName[feedId] = feedTitle;
+          // Feed ID'yi hash ile al
+          final int feedId = feedIdStr.hashCode;
+
+          _feedIdToFeedName[feedId] = feedTitle; // Feed Adını Kaydet
+          _feedIdToStreamId[feedId] =
+              feedIdStr; // Stream ID'yi Kaydet (daha sonra makale güncellemede kullanılır)
 
           final List categoriesOfFeed = sub['categories'] as List? ?? [];
           if (categoriesOfFeed.isNotEmpty) {
@@ -344,12 +339,15 @@ class RssFeedApiDataSource implements RssFeedDataSource {
                 (element) => element.isNotEmpty,
                 orElse: () => 'Genel');
             final int categoryId = categoryName.hashCode;
-            _feedIdToGroupId[feedId] = categoryId;
+            _feedIdToGroupId[feedId] =
+                categoryId; // Feed -> Kategori ID eşleşmesi
           } else {
-            _feedIdToGroupId[feedId] = 'Genel'.hashCode;
+            _feedIdToGroupId[feedId] =
+                'Genel'.hashCode; // Etiketsiz ise 'Genel' olarak ayarla
           }
         }
 
+        // --- 2. Kategori Tanımları (Tags'tan) ---
         Map<int, List<int>> groupFeeds = {};
         Map<int, int> groupFeedCount = {};
         Map<int, String> groupIdToName = {};
@@ -367,23 +365,24 @@ class RssFeedApiDataSource implements RssFeedDataSource {
             groupFeedCount[categoryId] = 0;
           }
         }
-        if (groupIdToName.isEmpty && _feedIdToFeedName.isNotEmpty) {
-          groupIdToName['Genel'.hashCode] = 'Genel';
-          groupFeeds['Genel'.hashCode] = [];
-          groupFeedCount['Genel'.hashCode] = 0;
-        }
 
-        _feedIdToFeedName.keys.forEach((feedId) {
-          final int groupId = _feedIdToGroupId[feedId] ?? 'Genel'.hashCode;
+        // --- 3. Feed'leri Kategorilere Atama ve Sayım (Gölgelenme Düzeltildi) ---
+        _feedIdToFeedName.keys.forEach((feedIdKey) {
+          // <<< feedIdKey adını kullanıyoruz
+          final int groupId = _feedIdToGroupId[feedIdKey] ?? 'Genel'.hashCode;
+
           if (!groupIdToName.containsKey(groupId)) {
+            // Eğer feed, Tags listesinde (tag/list) yoksa, 'Genel' olarak ekle
             groupIdToName[groupId] = 'Genel';
             groupFeeds[groupId] = [];
             groupFeedCount[groupId] = 0;
           }
-          groupFeeds[groupId]!.add(feedId);
+
+          groupFeeds[groupId]!.add(feedIdKey);
           groupFeedCount[groupId] = (groupFeedCount[groupId] ?? 0) + 1;
         });
 
+        // --- 4. Final Category Listesi Oluşturma ---
         _categoriesCache = groupIdToName.entries.map((entry) {
           final int groupId = entry.key;
           final String groupName = entry.value;
@@ -398,16 +397,18 @@ class RssFeedApiDataSource implements RssFeedDataSource {
           );
         }).toList();
 
+        // "Hepsi" Kategorisini Ekle
         List<int> allFeedIds = _feedIdToFeedName.keys.toList();
         int totalFeedCount = allFeedIds.length;
         _categoriesCache.insert(
           0,
           RssCategory(
-              name: "Hepsi",
-              count: totalFeedCount,
-              icon: LucideIcons.home,
-              id: 0,
-              feedIds: allFeedIds),
+            name: "Hepsi",
+            count: totalFeedCount,
+            icon: LucideIcons.home,
+            id: 0,
+            feedIds: allFeedIds,
+          ),
         );
 
         return _categoriesCache;
@@ -527,7 +528,6 @@ class RssFeedApiDataSource implements RssFeedDataSource {
     // Action Token'ı çek. Eğer Main Token geçersizse, _getActionToken yenilemeyi dener.
     final String actionToken = await _getActionToken(apiUrl, token);
 
-
     // Makale durumu etiketi: Bu etiketi eklemek/kaldırmak makaleyi okundu/okunmadı yapar.
     final String tagToModify = 'user/-/state/com.google/read';
 
@@ -604,5 +604,82 @@ class RssFeedApiDataSource implements RssFeedDataSource {
     } on DioException {
       throw Exception('Toplu okundu işaretleme hatası.');
     }
+  }
+
+  @override
+  Future<void> addSubscription(
+      String apiUrl, String token, String feedUrl) async {
+    final normalizedUrl = _normalizeUrl(apiUrl);
+    final endpointUrl =
+        '$normalizedUrl/p/api/greader.php/reader/api/0/subscription/quickadd';
+
+    try {
+      final response = await _httpClient.post(
+        endpointUrl,
+        data: {
+          'quickadd': feedUrl,
+          'T': await _getActionToken(apiUrl, token), // Action Token gerekli
+        },
+        options: Options(
+          contentType: Headers.formUrlEncodedContentType,
+          headers: {'Authorization': 'GoogleLogin auth=$token'},
+        ),
+      );
+
+      if (response.statusCode != 200) {
+        throw Exception('Sunucu yanıtı geçersiz veya hata verdi.');
+      }
+    } on DioException catch (e) {
+      throw Exception('API abonelik eklemede başarısız oldu: ${e.message}');
+    }
+  }
+
+  @override
+  Future<void> unsubscribeFeed(String apiUrl, String token, int feedId) async {
+    final streamId = _getStreamId(feedId);
+    if (streamId == null) throw Exception('Feed Stream ID bulunamadı.');
+
+    final normalizedUrl = _normalizeUrl(apiUrl);
+    final endpointUrl =
+        '$normalizedUrl/p/api/greader.php/reader/api/0/subscription/edit';
+
+    final actionToken = await _getActionToken(apiUrl, token);
+    // ... (API çağrısı) ...
+    final response = await _httpClient.post(
+      endpointUrl,
+      data: {
+        'T': actionToken,
+        's': streamId, // Stream ID (Feed ID)
+        'ac': 'unsubscribe', // Aksiyon: Abonelikten çık
+      },
+      // ... (Options) ...
+    );
+    // ... (Hata kontrolü) ...
+  }
+
+  @override
+  Future<void> setFeedCategory(
+      String apiUrl, String token, int feedId, String newCategoryName,
+      {String? oldCategoryName}) async {
+    final streamId = _getStreamId(feedId);
+    if (streamId == null) throw Exception('Feed Stream ID bulunamadı.');
+
+    final normalizedUrl = _normalizeUrl(apiUrl);
+    final endpointUrl =
+        '$normalizedUrl/p/api/greader.php/reader/api/0/edit-tag';
+
+    final newTag = 'user/-/label/$newCategoryName';
+    final Map<String, dynamic> requestData = {
+      'T': await _getActionToken(apiUrl, token),
+      'i': streamId, // Stream ID
+      'a': newTag, // Yeni etiketi EKLE
+    };
+
+    // Eski kategoriyi kaldırma işlemi
+    if (oldCategoryName != null && oldCategoryName != 'Genel') {
+      final oldTag = 'user/-/label/$oldCategoryName';
+      requestData['r'] = oldTag; // Eski etiketi KALDIR
+    }
+    // ... (API çağrısı ve hata kontrolü) ...
   }
 }

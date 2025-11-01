@@ -91,4 +91,24 @@ class FeedRepository {
 
     await apiDataSource.markAllAsRead(url, token);
   }
+
+  Future<Map<String, String?>> getCredentials() async {
+    return storageService.getCredentials();
+  }
+
+  Future<void> addSubscription(
+      String apiUrl, String token, String feedUrl) async {
+    await apiDataSource.addSubscription(apiUrl, token, feedUrl);
+  }
+
+  Future<void> unsubscribeFeed(String apiUrl, String token, int feedId) async {
+    await apiDataSource.unsubscribeFeed(apiUrl, token, feedId);
+  }
+
+  Future<void> setFeedCategory(
+      String apiUrl, String token, int feedId, String newCategoryName,
+      {String? oldCategoryName}) async {
+    await apiDataSource.setFeedCategory(apiUrl, token, feedId, newCategoryName,
+        oldCategoryName: oldCategoryName);
+  }
 }

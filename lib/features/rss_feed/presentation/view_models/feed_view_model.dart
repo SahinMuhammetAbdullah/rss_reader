@@ -175,12 +175,12 @@ class FeedViewModel extends ChangeNotifier {
         timestamp: currentFeed.timestamp,
         feedId: currentFeed.feedId,
         // 🚨 KRİTİK: EKSİK OLAN ALANLAR EKLENDİ
-  
       );
       notifyListeners();
     }
 
     // 2. SUNUCU İŞLEMİ VE KALICILIK
+
     try {
       await repository.markItemStatus(itemId, isRead);
       print('✅ Sunucuya güncelleme isteği başarıyla gönderildi.');
@@ -289,5 +289,98 @@ class FeedViewModel extends ChangeNotifier {
 
     _isLoading = false;
     notifyListeners();
+  }
+
+  Future<void> addSubscription(String url) async {
+    _isLoading = true;
+    _errorMessage = null;
+    notifyListeners();
+
+    try {
+      // Repository'den kimlik bilgilerini çek (API çağrısı için zorunlu)
+      final credentials = await repository.getCredentials();
+
+      final token = credentials['authToken'];
+      final apiUrl = credentials['url'];
+
+      if (token == null || apiUrl == null) {
+        // Eğer token veya URL eksikse (kullanıcı logout olmuşsa)
+        throw Exception(
+            "Yetkilendirme bilgileri eksik. Lütfen yeniden giriş yapın.");
+      }
+
+      // Repository üzerinden quickadd API çağrısını başlat
+      // NOT: Repository'nin bu metodu çağırmadan önce API'ye uygun formatta olduğundan emin olun.
+      await repository.addSubscription(apiUrl, token, url);
+      _errorMessage = null; // Başarılıysa hata mesajını temizle
+    } catch (e) {
+      _errorMessage = "Abonelik eklenemedi: ${e.toString()}";
+    } finally {
+      _isLoading = false;
+      notifyListeners(); // UI'ı güncelle
+    }
+  }
+
+  List<FeedSubscription> getFeedsForCategory(int categoryId) {
+    // 1. targetCategory artık RssCategory? tipindedir.
+    final targetCategory =
+        categories.firstWhereOrNull((cat) => cat.id == categoryId);
+
+    // 2. Eğer kategori bulunamazsa, boş liste dön.
+    if (targetCategory == null) return [];
+
+    return targetCategory.feedIds.map((feedId) {
+      final feedTitle = 'Feed Adı: $feedId';
+
+      return FeedSubscription(
+        feedId: feedId,
+        title: feedTitle,
+        categoryName: targetCategory.name, // targetCategory null değil
+        categoryId: categoryId,
+      );
+    }).toList();
+  }
+
+  Future<void> removeSubscription(int feedId) async {
+    // ... (Loading state, credentials check) ...
+    try {
+      final credentials = await repository.getCredentials();
+      final apiUrl = credentials['url']!;
+      final token = credentials['authToken']!;
+      await repository.unsubscribeFeed(apiUrl, token, feedId);
+      await fetchAllRssData(); // UI ve cache yenileme
+    } catch (e) {
+      // ... (Error handling) ...
+    } finally {
+      // ...
+    }
+  }
+
+  Future<void> moveSubscription(int feedId, String newCategoryName,
+      {required String oldCategoryName}) async {
+    // ... (Loading state, credentials check) ...
+    try {
+      final credentials = await repository.getCredentials();
+      final apiUrl = credentials['url']!;
+      final token = credentials['authToken']!;
+
+      // Artık ViewModel'den değil, Repository'den çekilen bilgileri kullan
+      await repository.setFeedCategory(apiUrl, token, feedId, newCategoryName,
+          oldCategoryName: oldCategoryName);
+    } catch (e) {
+      // ... (Error handling) ...
+    } finally {
+      // ...
+    }
+  }
+}
+
+extension RssCategoryListExtension on List<RssCategory> {
+  // Bu uzantı, bir öğe bulunamazsa null döndürür
+  RssCategory? firstWhereOrNull(bool Function(RssCategory) test) {
+    for (var element in this) {
+      if (test(element)) return element;
+    }
+    return null;
   }
 }
